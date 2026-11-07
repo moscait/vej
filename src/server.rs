@@ -54,7 +54,7 @@ pub struct StatusResponse {
     pub version: &'static str,
 }
 
-use tower_http::cors::CorsLayer;
+use crate::access::{self, AccessPolicy};
 use tower_http::services::ServeDir;
 
 pub async fn run_server(
@@ -62,7 +62,9 @@ pub async fn run_server(
     config: Config,
     host: &str,
     port: u16,
+    allowed_origins: &[String],
 ) -> Result<()> {
+    let policy = Arc::new(AccessPolicy::new(host, port, allowed_origins));
     let shutdown_notify = Arc::new(tokio::sync::Notify::new());
     let state = Arc::new(ServerState {
         engine: RwLock::new(engine),
@@ -94,8 +96,9 @@ pub async fn run_server(
     }
 
     let app = app
-        .layer(CorsLayer::permissive())
-        .with_state(state);
+        .with_state(state)
+        .layer(policy.cors_layer())
+        .layer(axum::middleware::from_fn_with_state(policy, access::guard));
 
     let addr = format!("{}:{}", host, port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;

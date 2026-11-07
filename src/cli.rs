@@ -36,6 +36,11 @@ pub struct ServeArgs {
     #[arg(short, long, default_value_t = 8080)]
     pub port: u16,
 
+    /// Extra browser origin allowed to call the API (repeatable), e.g. http://localhost:3000.
+    /// The daemon's own origin is always allowed.
+    #[arg(long = "allow-origin", value_name = "ORIGIN")]
+    pub allow_origins: Vec<String>,
+
     /// Number of GPU layers to offload (default: 99 for full Metal/CUDA acceleration)
     #[arg(long)]
     pub gpu_layers: Option<u32>,

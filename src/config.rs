@@ -11,6 +11,10 @@ pub struct Config {
     pub threads: u32,
     pub n_gpu_layers: u32,
     pub n_ctx: u32,
+    /// Extra browser origins allowed to call the daemon (e.g. "http://localhost:3000").
+    /// The daemon's own origin and its loopback aliases are always allowed.
+    #[serde(default)]
+    pub allowed_origins: Vec<String>,
     pub models: HashMap<String, ModelConfig>,
 }
 
@@ -33,6 +37,7 @@ impl Default for Config {
             threads,
             n_gpu_layers: 99,
             n_ctx: 2048,
+            allowed_origins: Vec::new(),
             models: HashMap::new(),
         }
     }

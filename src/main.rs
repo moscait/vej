@@ -2,6 +2,7 @@ mod cli;
 mod config;
 mod engine;
 mod models;
+mod access;
 mod server;
 
 use anyhow::{Context, Result};
@@ -52,7 +53,10 @@ async fn handle_serve(args: ServeArgs, config: Config) -> Result<()> {
         config.n_ctx,
     )?;
 
-    server::run_server(engine, config, &args.host, args.port).await?;
+    let mut allowed_origins = config.allowed_origins.clone();
+    allowed_origins.extend(args.allow_origins.iter().cloned());
+
+    server::run_server(engine, config, &args.host, args.port, &allowed_origins).await?;
     Ok(())
 }
 
