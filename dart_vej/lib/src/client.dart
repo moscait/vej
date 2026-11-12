@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'exceptions.dart';
+import 'batch.dart';
 import 'models.dart';
 
 /// Idiomatic client for vej (and hosted Jev) System 1 AI decision services.
@@ -46,13 +47,16 @@ class VejClient {
         _httpClient = httpClient ?? http.Client();
 
   /// Creates a client targeting the hosted TypeSafe AI Jev endpoint.
+  ///
+  /// [baseUrl] points at another Jev-compatible endpoint.
   factory VejClient.hosted({
     required String apiKey,
+    String baseUrl = 'https://api.typesafe.ai',
     Duration timeout = const Duration(seconds: 30),
     http.Client? httpClient,
   }) {
     return VejClient(
-      baseUrl: 'https://api.typesafe.ai',
+      baseUrl: baseUrl,
       apiKey: apiKey,
       timeout: timeout,
       httpClient: httpClient,
@@ -79,7 +83,8 @@ class VejClient {
   Future<DaemonStatus> getStatus() async {
     final uri = baseUrl.replace(path: '${baseUrl.path}/health');
     try {
-      final response = await _httpClient.get(uri).timeout(timeout);
+      final response =
+          await _httpClient.get(uri, headers: _buildHeaders()).timeout(timeout);
       if (response.statusCode >= 200 && response.statusCode < 300) {
         final decoded = jsonDecode(response.body) as Map<String, dynamic>;
         return DaemonStatus.fromJson(decoded);
@@ -101,7 +106,8 @@ class VejClient {
   Future<List<ModelInfo>> listModels() async {
     final uri = baseUrl.replace(path: '${baseUrl.path}/v1/models');
     try {
-      final response = await _httpClient.get(uri).timeout(timeout);
+      final response =
+          await _httpClient.get(uri, headers: _buildHeaders()).timeout(timeout);
       if (response.statusCode >= 200 && response.statusCode < 300) {
         final decoded = jsonDecode(response.body) as List<dynamic>;
         return decoded
@@ -293,6 +299,63 @@ class VejClient {
       if (e is VejException) rethrow;
       throw VejConnectionException(
         'Connection error during decision evaluation: $e',
+        details: e,
+      );
+    }
+  }
+
+  /// Evaluates the same [questions] for every item in one HTTP call.
+  ///
+  /// An empty [items] list returns an empty result without contacting the server.
+  Future<BatchDecisionResult> evaluateQuestionsBatch({
+    required Map<String, QuestionSpec> questions,
+    required List<BatchItem> items,
+    String? model,
+    double temperature = 1.0,
+  }) async {
+    if (questions.isEmpty) {
+      throw const VejValidationException('Questions map cannot be empty.');
+    }
+    if (items.isEmpty) {
+      return const BatchDecisionResult(
+        model: '',
+        results: [],
+        totalTokens: 0,
+        latencyMs: 0.0,
+      );
+    }
+    return evaluateBatch(BatchDecisionRequest(
+      model: model,
+      questions: questions,
+      items: items,
+      temperature: temperature,
+    ));
+  }
+
+  /// Sends a batch request to `/v1/systemone/batch`.
+  Future<BatchDecisionResult> evaluateBatch(
+      BatchDecisionRequest request) async {
+    final uri = baseUrl.replace(path: '${baseUrl.path}/v1/systemone/batch');
+    try {
+      final response = await _httpClient
+          .post(
+            uri,
+            headers: _buildHeaders(),
+            body: jsonEncode(request.toJson()),
+          )
+          .timeout(timeout);
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+        return BatchDecisionResult.fromJson(decoded);
+      }
+      throw VejException(
+        'Server returned error: ${response.body}',
+        statusCode: response.statusCode,
+      );
+    } catch (e) {
+      if (e is VejException) rethrow;
+      throw VejConnectionException(
+        'Connection error during batch decision evaluation: $e',
         details: e,
       );
     }

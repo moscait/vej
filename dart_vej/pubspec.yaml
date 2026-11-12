@@ -1,6 +1,6 @@
 name: vej
 description: A high-performance, idiomatic Dart/Flutter client and decision engine library for vej (System 1 AI decision engine).
-version: 0.1.0
+version: 0.2.0
 homepage: https://github.com/moscait/vej
 repository: https://github.com/moscait/vej/tree/main/dart_vej
 issue_tracker: https://github.com/moscait/vej/issues

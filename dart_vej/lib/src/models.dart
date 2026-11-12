@@ -52,8 +52,26 @@ class QuestionSpec {
   Map<String, dynamic> toJson() {
     final map = <String, dynamic>{'type': type};
     if (instructions != null) map['instructions'] = instructions;
-    if (criteria != null) map['criteria'] = criteria;
+    if (criteria != null) map['criteria'] = _wireCriteria();
     return map;
+  }
+
+  /// Score levels keyed `0..n` are sent as a list in level order: the hosted Jev API
+  /// expects a list, and vej reads list index `i` as level `i`. Any other map is sent
+  /// as-is so that no level gets renumbered.
+  dynamic _wireCriteria() {
+    final c = criteria;
+    if (type != 'score' || c is! Map || c.isEmpty) return c;
+    final levels = <int, dynamic>{};
+    for (final entry in c.entries) {
+      final level = int.tryParse(entry.key.toString());
+      if (level == null) return c;
+      levels[level] = entry.value;
+    }
+    for (var i = 0; i < levels.length; i++) {
+      if (!levels.containsKey(i)) return c;
+    }
+    return [for (var i = 0; i < levels.length; i++) levels[i].toString()];
   }
 
   factory QuestionSpec.fromJson(Map<String, dynamic> json) {

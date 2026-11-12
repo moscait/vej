@@ -5,6 +5,7 @@
 library vej;
 
 export 'src/models.dart';
+export 'src/batch.dart';
 export 'src/client.dart';
 export 'src/exceptions.dart';
 export 'src/presets.dart';

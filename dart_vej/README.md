@@ -24,7 +24,10 @@ Add `vej` to your `pubspec.yaml`:
 ```yaml
 dependencies:
   vej:
-    path: ../dart_vej # Or git repository / pub.dev
+    git:
+      url: https://github.com/moscait/vej.git
+      path: dart_vej
+      ref: <commit or tag>   # pin a revision for reproducible builds
 ```
 
 Then run:
@@ -136,13 +139,47 @@ print('Fast Track: ${evaluation.answers['interview_fast_track']?.noul}');
 
 ---
 
-### 5. Connecting to Hosted TypeSafe AI Jev
+### 5. Batch Evaluation
+
+Evaluate the same questions for many items in one request (`POST /v1/systemone/batch`):
+
+```dart
+final batch = await vej.evaluateQuestionsBatch(
+  questions: {
+    'is_relevant': QuestionSpec.noul(instructions: 'Is this verse about forgiveness?'),
+  },
+  items: const [
+    BatchItem(id: 'mat-6-14', state: 'For if ye forgive men their trespasses...'),
+    BatchItem(id: 'gen-1-1', state: 'In the beginning God created...'),
+  ],
+);
+for (final item in batch.results) {
+  print('${item.id}: ${item.jevResult?.answers['is_relevant']?.noul}');
+}
+```
+
+Use `evaluateBatch(BatchDecisionRequest(...))` for shared `choices` or `instruction` and per-item overrides.
+
+---
+
+### 6. Remote vej (Bearer Token)
+
+A `vej` reached over its remote socket or OpenZiti may require a bearer token (`vej remote token create <name>`). Pass it as `apiKey`; it is sent on every request:
+
+```dart
+final vej = VejClient(baseUrl: 'http://vej.ziti', apiKey: token);
+```
+
+---
+
+### 7. Connecting to Hosted TypeSafe AI Jev
 
 To use the cloud-hosted Jev service instead of local `vej`:
 
 ```dart
 final client = VejClient.hosted(
   apiKey: 'ts_live_your_api_key_here',
+  // baseUrl: 'https://...',  // another Jev-compatible endpoint
 );
 ```
 
