@@ -1,11 +1,14 @@
 mod access;
+mod activation;
 mod cli;
 mod config;
 mod engine;
+mod idle;
 mod keep_alive;
 mod model_manager;
 mod models;
 mod server;
+mod service;
 #[cfg(test)]
 mod test_support;
 
@@ -20,7 +23,11 @@ use std::path::Path;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    // Plain text when stderr is a log file (launchd) or journald rather than a terminal.
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
+        .init();
 
     let cli = Cli::parse();
     let config = load_config().unwrap_or_else(|e| {
@@ -33,6 +40,7 @@ async fn main() -> Result<()> {
         Commands::Decide(args) => handle_decide(args, config),
         Commands::Models(args) => handle_models(args).await,
         Commands::Config(args) => handle_config(args),
+        Commands::Service(args) => service::handle(args, config).await,
     }
 }
 
@@ -48,8 +56,15 @@ async fn handle_serve(args: ServeArgs, config: Config) -> Result<()> {
         threads: settings.threads,
         n_ctx: settings.n_ctx,
     };
+    // Take the socket before loading anything so a busy port fails fast.
+    let (listener, source) = activation::listener(&settings.host, settings.port)?;
+    if source.is_activated() {
+        tracing::info!(?source, "Using the socket passed by the service manager");
+    }
+
     let manager = ModelManager::new(loader, &settings.model, settings.keep_alive);
-    if settings.preload {
+    // A socket-activated start may be a mere health probe; load on the first real request.
+    if settings.preload && !source.is_activated() {
         drop(manager.acquire(None, None).await?);
     }
 
@@ -62,9 +77,10 @@ async fn handle_serve(args: ServeArgs, config: Config) -> Result<()> {
     let state = server::AppState::new(manager, settings.max_concurrent);
     server::run_server(
         state,
+        listener,
         &settings.host,
-        settings.port,
         &settings.allowed_origins,
+        settings.idle_exit,
     )
     .await
 }

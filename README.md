@@ -348,6 +348,46 @@ curl -X POST http://127.0.0.1:8080/v1/systemone \
 ### `GET /v1/models`
 Inspect all configured models, sizes, origin, and whether they are active or cached locally.
 
+### Model Lifecycle: Keep-Alive & Idle Unloading
+Like Ollama, `vej` keeps the daemon running but releases the model's RAM/VRAM when it has been idle, and reloads it on the next request (a 1B model reloads in ~0.2 s).
+
+| Setting | Config key | CLI flag | Default |
+| :--- | :--- | :--- | :--- |
+| Idle time before the model unloads (`"5m"`, `"1h30m"`, seconds; `0` = after each request; `-1` = never) | `keep_alive` | `--keep-alive` | `5m` |
+| Maximum concurrent inferences | `max_concurrent` | `--max-concurrent` | `2` |
+| Load the model at startup | `preload` | `--no-preload` | `true` |
+| Exit the daemon itself after this long without requests (for on-demand services) | `idle_exit` | `--idle-exit` | never |
+
+Any request can override `keep_alive` (`"keep_alive": "30m"` in the JSON body); the most recent request wins. The model you switch to stays active across unloads.
+
+```bash
+curl http://127.0.0.1:8080/v1/ps          # loaded model and time until it unloads
+curl -X POST http://127.0.0.1:8080/v1/unload   # release it now
+```
+
+---
+
+## 🌙 Running in the Background
+
+Install `vej` as a per-user service (launchd on macOS, `systemd --user` on Linux; no admin rights needed). `vej service install` accepts the same options as `vej serve`:
+
+```bash
+# Always-on: starts at login, restarts after crashes; idle models still unload
+vej service install -m llama-3.2-3b --keep-alive 10m
+
+# On-demand: launchd/systemd own the port and start vej on the first connection;
+# vej exits after 30 idle minutes, so nothing stays resident while unused
+vej service install --on-demand --idle-exit 30m
+
+vej service status      # mode, pid, endpoint, loaded model, log location
+vej service stop        # stop until the next login (or `vej service start`)
+vej service uninstall
+```
+
+Logs go to `~/Library/Logs/vej/vej.log` on macOS and to `journalctl --user -u vej.service` on Linux. On Linux, user services stop at logout unless you run `loginctl enable-linger $USER`. Windows support for `vej service` is not available yet; run `vej serve` from Task Scheduler instead.
+
+> **Tip:** Install from a stable binary location (e.g. after `cargo install --path .`); the service records the absolute path of the `vej` executable you ran.
+
 ---
 
 ## 🧠 Advanced Use Cases & Complex Examples

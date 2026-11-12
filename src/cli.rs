@@ -1,4 +1,5 @@
 use clap::{Args, Parser, Subcommand};
+use std::time::Duration;
 
 use crate::config::Config;
 use crate::keep_alive::KeepAlive;
@@ -27,6 +28,45 @@ pub enum Commands {
 
     /// Manage configuration
     Config(ConfigArgs),
+
+    /// Run vej as a per-user background service (launchd on macOS, systemd --user on Linux)
+    Service(ServiceArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ServiceArgs {
+    #[command(subcommand)]
+    pub command: ServiceCommands,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ServiceCommands {
+    /// Install vej as a background service and start it
+    Install(InstallArgs),
+    /// Stop and remove the background service
+    Uninstall,
+    /// Start the installed service
+    Start,
+    /// Stop the installed service (it stays installed and starts again at next login)
+    Stop,
+    /// Show whether the service is installed and running
+    Status,
+}
+
+#[derive(Args, Debug)]
+pub struct InstallArgs {
+    /// Options passed to `vej serve` by the service
+    #[command(flatten)]
+    pub serve: ServeArgs,
+
+    /// Let launchd/systemd own the port and start vej on the first connection.
+    /// Combine with --idle-exit so nothing stays resident while unused.
+    #[arg(long)]
+    pub on_demand: bool,
+
+    /// Replace an existing installation
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Args, Debug)]
@@ -55,6 +95,11 @@ pub struct ServeArgs {
     #[arg(long)]
     pub no_preload: bool,
 
+    /// Exit after this long with no requests, e.g. 30m (0 or -1 = never). Only useful with
+    /// socket activation (`vej service install --on-demand`), which restarts vej on demand.
+    #[arg(long, value_parser = parse_keep_alive, allow_hyphen_values = true)]
+    pub idle_exit: Option<KeepAlive>,
+
     /// Extra browser origin allowed to call the API (repeatable), e.g. http://localhost:3000.
     /// The daemon's own origin is always allowed.
     #[arg(long = "allow-origin", value_name = "ORIGIN")]
@@ -82,6 +127,8 @@ pub struct ServeSettings {
     pub keep_alive: KeepAlive,
     pub max_concurrent: usize,
     pub preload: bool,
+    /// `Some` when the daemon should exit after this long without requests.
+    pub idle_exit: Option<Duration>,
 }
 
 impl ServeArgs {
@@ -106,6 +153,10 @@ impl ServeArgs {
             keep_alive: self.keep_alive.unwrap_or(config.keep_alive),
             max_concurrent: self.max_concurrent.unwrap_or(config.max_concurrent),
             preload: config.preload && !self.no_preload,
+            idle_exit: match self.idle_exit.unwrap_or(config.idle_exit) {
+                KeepAlive::For(d) if !d.is_zero() => Some(d),
+                KeepAlive::For(_) | KeepAlive::Forever => None,
+            },
         }
     }
 }
@@ -261,6 +312,64 @@ mod tests {
             args.resolve(&config).allowed_origins,
             ["http://localhost:3000", "http://wordstudy.local:9000"]
         );
+    }
+
+    #[test]
+    fn idle_exit_is_disabled_by_default_and_by_zero_or_negative() {
+        assert_eq!(serve_args(&[]).resolve(&Config::default()).idle_exit, None);
+        assert_eq!(
+            serve_args(&["--idle-exit", "0"])
+                .resolve(&config())
+                .idle_exit,
+            None
+        );
+        assert_eq!(
+            serve_args(&["--idle-exit", "-1"])
+                .resolve(&config())
+                .idle_exit,
+            None
+        );
+        assert_eq!(
+            serve_args(&["--idle-exit", "30m"])
+                .resolve(&config())
+                .idle_exit,
+            Some(Duration::from_secs(1800))
+        );
+        let from_config = Config {
+            idle_exit: KeepAlive::For(Duration::from_secs(600)),
+            ..Config::default()
+        };
+        assert_eq!(
+            serve_args(&[]).resolve(&from_config).idle_exit,
+            Some(Duration::from_secs(600))
+        );
+    }
+
+    #[test]
+    fn service_install_accepts_serve_options() {
+        let cli = Cli::try_parse_from([
+            "vej",
+            "service",
+            "install",
+            "--on-demand",
+            "--idle-exit",
+            "30m",
+            "-m",
+            "llama-3.2-1b",
+            "--port",
+            "47831",
+        ])
+        .unwrap();
+        let Commands::Service(ServiceArgs {
+            command: ServiceCommands::Install(install),
+        }) = cli.command
+        else {
+            panic!("expected service install");
+        };
+        assert!(install.on_demand);
+        assert!(!install.force);
+        assert_eq!(install.serve.model.as_deref(), Some("llama-3.2-1b"));
+        assert_eq!(install.serve.port, Some(47831));
     }
 
     #[test]

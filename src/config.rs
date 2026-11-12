@@ -25,6 +25,9 @@ pub struct Config {
     pub max_concurrent: usize,
     /// Load the default model at startup instead of on the first request.
     pub preload: bool,
+    /// Exit after this long with no requests (0 or -1 = never). Meant for socket-activated
+    /// services, which restart vej on the next connection.
+    pub idle_exit: KeepAlive,
     pub models: HashMap<String, ModelConfig>,
 }
 
@@ -51,6 +54,7 @@ impl Default for Config {
             keep_alive: KeepAlive::default(),
             max_concurrent: DEFAULT_MAX_CONCURRENT,
             preload: true,
+            idle_exit: KeepAlive::Forever,
             models: HashMap::new(),
         }
     }

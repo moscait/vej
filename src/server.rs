@@ -16,6 +16,7 @@ use crate::access::{self, AccessPolicy};
 use crate::engine::{
     BatchDecisionRequest, BatchDecisionResponse, DecisionModel, DecisionRequest, UnifiedResponse,
 };
+use crate::idle::{self, ActivityTracker};
 use crate::keep_alive::KeepAlive;
 use crate::model_manager::{ModelLease, ModelLoader, ModelManager};
 use crate::models::{RECOMMENDED_MODELS, find_model_spec, get_cache_dir};
@@ -88,8 +89,10 @@ pub struct AppState<L: ModelLoader> {
     pub manager: Arc<ModelManager<L>>,
     /// Bounds concurrent inferences; each one allocates its own KV cache.
     inference_slots: Arc<Semaphore>,
-    /// Signalled by `POST /v1/shutdown`.
+    /// Signalled by `POST /v1/shutdown` and by `--idle-exit`.
     shutdown: Notify,
+    /// Request activity, used by `--idle-exit`.
+    pub activity: Arc<ActivityTracker>,
 }
 
 impl<L: ModelLoader> AppState<L> {
@@ -98,6 +101,7 @@ impl<L: ModelLoader> AppState<L> {
             manager,
             inference_slots: Arc::new(Semaphore::new(max_concurrent.max(1))),
             shutdown: Notify::new(),
+            activity: ActivityTracker::new(),
         })
     }
 
@@ -143,25 +147,39 @@ where
             "/playground/{*path}",
             get(|Path(path): Path<String>| async move { serve_playground_asset(&path) }),
         )
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&state.activity),
+            idle::track_activity,
+        ))
         .with_state(state)
         .layer(policy.cors_layer())
         .layer(axum::middleware::from_fn_with_state(policy, access::guard))
 }
 
+/// Serves on `listener` (bound by vej or handed over by launchd/systemd) until Ctrl-C,
+/// SIGTERM, `POST /v1/shutdown`, or `idle_exit` without requests.
 pub async fn run_server<L>(
     state: Arc<AppState<L>>,
+    listener: std::net::TcpListener,
     host: &str,
-    port: u16,
     allowed_origins: &[String],
+    idle_exit: Option<Duration>,
 ) -> Result<()>
 where
     L: ModelLoader,
     L::Model: DecisionModel,
 {
+    listener.set_nonblocking(true)?;
+    let listener = tokio::net::TcpListener::from_std(listener)?;
+    let port = listener.local_addr()?.port();
     let policy = Arc::new(AccessPolicy::new(host, port, allowed_origins));
     let app = build_router(Arc::clone(&state), policy);
+    if let Some(idle) = idle_exit {
+        tracing::info!(idle = ?idle, "Will exit after this long without requests");
+        spawn_idle_exit(Arc::clone(&state), idle);
+    }
+
     let addr = format!("{host}:{port}");
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("vej Jev-compatible server listening on http://{addr}");
     println!("🚀 vej decision & generation daemon running at http://{addr}");
     println!("📌 POST /v1/systemone       - Evaluate typed decisions");
@@ -179,7 +197,7 @@ where
             tokio::select! {
                 () = shutdown_signal() => {}
                 () = state.shutdown.notified() => {
-                    tracing::info!("Shutdown requested via HTTP; stopping vej daemon");
+                    tracing::info!("Shutdown requested (POST /v1/shutdown or idle exit); stopping vej daemon");
                 }
             }
             // Don't let a long generation hold the process open indefinitely.
@@ -191,6 +209,15 @@ where
         })
         .await?;
     Ok(())
+}
+
+/// Requests shutdown once no request has arrived for `idle`.
+fn spawn_idle_exit<L: ModelLoader>(state: Arc<AppState<L>>, idle: Duration) {
+    tokio::spawn(async move {
+        idle::wait_until_idle_for(&state.activity, idle).await;
+        tracing::info!(idle = ?idle, "No requests for the idle-exit period; shutting down");
+        state.shutdown.notify_one();
+    });
 }
 
 /// Runs `work` against a leased model on the blocking pool, within the concurrency limit.
@@ -748,6 +775,51 @@ mod tests {
         let (_, body) = post_json(&app, "/v1/systemone", decision(json!({}))).await;
         assert_eq!(body["model"], "model-b");
         assert_eq!(probe.loads(), ["model-b", "model-b"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn requests_are_recorded_as_activity() {
+        let (loader, _probe) = FakeLoader::new();
+        let (app, state) = app_and_state(loader, 2);
+
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        get_json(&app, "/v1/models").await;
+
+        assert_eq!(
+            state.activity.idle_since(),
+            Some(tokio::time::Instant::now())
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn status_probes_do_not_keep_an_idle_daemon_alive() {
+        // `vej service status` and supervisors poll these; counting them would mean
+        // watching the daemon prevents it from ever idling out.
+        let (loader, _probe) = FakeLoader::new();
+        let (app, state) = app_and_state(loader, 2);
+        let started = tokio::time::Instant::now();
+
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        for path in ["/health", "/v1/ps", "/"] {
+            get_json(&app, path).await;
+        }
+
+        assert_eq!(state.activity.idle_since(), Some(started));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_exit_requests_shutdown_after_a_quiet_period() {
+        let (loader, _probe) = FakeLoader::new();
+        let (app, state) = app_and_state(loader, 2);
+        spawn_idle_exit(Arc::clone(&state), Duration::from_secs(60));
+
+        tokio::time::sleep(Duration::from_secs(50)).await;
+        get_json(&app, "/v1/models").await;
+        let early = tokio::time::timeout(Duration::from_secs(59), state.shutdown.notified()).await;
+        assert!(early.is_err(), "activity at t=50s postpones exit to t=110s");
+
+        let on_time = tokio::time::timeout(Duration::from_secs(2), state.shutdown.notified()).await;
+        assert!(on_time.is_ok(), "shutdown requested once idle for 60s");
     }
 
     #[tokio::test]
