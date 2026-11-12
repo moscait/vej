@@ -423,7 +423,7 @@ The Dart client sends the token with `VejClient(baseUrl: ..., apiKey: token)`.
 [remote]
 socket = "/Users/me/.vej/remote.sock"   # same as --remote-socket
 # tokens_file = "..."                   # default: <config dir>/vej/remote_tokens
-require_token = true                    # false only when e.g. OpenZiti authenticates callers
+require_token = true                    # false (or --remote-token-optional) when e.g. OpenZiti authenticates
 allow_model_selection = false           # let remote requests pick a catalog model
 allow_keep_alive = false                # let remote requests pin or unload models
 ```
@@ -431,6 +431,23 @@ allow_keep_alive = false                # let remote requests pin or unload mode
 `vej` refuses to start when remote clients can connect, tokens are required, and none exist.
 
 > **Reverse proxies and tunnelers:** point them at `--remote-socket`, not at `127.0.0.1`. Anything that connects over loopback is treated as local.
+
+Two flags support a socket-only setup:
+- **`vej serve --no-tcp --remote-socket <path>`:** opens no TCP port at all. The admin API and playground are then unavailable; stop vej with SIGTERM.
+- **`--remote-token-optional`:** drops the bearer-token requirement for when another layer authenticates callers. Any token a client does send must still be valid.
+
+### 🛡️ OpenZiti: `zvej`
+
+[`zvej`](zvej/README.md) is a separate binary that hosts vej as an [OpenZiti](https://openziti.io) service. Plain `vej` contains no OpenZiti code.
+- **No open port:** zvej runs `vej serve --no-tcp` on a private socket. Only enrolled Ziti identities with a Dial policy can reach it, from any network.
+- **Identity:** each caller is authenticated by OpenZiti and named in zvej's audit log.
+- **Scale to zero:** with `--lazy` and vej's `--idle-exit`, vej and its model start on the first request and exit when idle, while zvej stays resident.
+
+```bash
+zvej serve --identity vej-host.json -- -m gemma-4-e2b --idle-exit 30m
+```
+
+Flutter and other apps connect through a Ziti tunneler on the device, e.g. `VejClient(baseUrl: 'http://vej.ziti')`. Go and other languages can also use an OpenZiti SDK directly. Release archives for macOS and Linux include `zvej`.
 
 ---
 
