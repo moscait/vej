@@ -111,6 +111,14 @@ fn serve_args(serve: &ServeArgs, host: &str, port: u16) -> Vec<String> {
         serve.gpu_layers.map(|n| n.to_string()),
     );
     push_option(&mut args, "--threads", serve.threads.map(|n| n.to_string()));
+    push_option(
+        &mut args,
+        "--remote-socket",
+        serve
+            .remote_socket
+            .as_deref()
+            .map(|p| absolute(&p.display().to_string())),
+    );
     for origin in &serve.allow_origins {
         push_option(&mut args, "--allow-origin", Some(origin.clone()));
     }
@@ -300,6 +308,22 @@ mod tests {
         let s = spec(&["-m", "Cargo.toml"]);
         let model = &s.args[s.args.iter().position(|a| a == "--model").unwrap() + 1];
         assert!(Path::new(model).is_absolute(), "{model}");
+    }
+
+    #[test]
+    fn passes_remote_socket_through_as_an_absolute_path() {
+        let s = spec(&["--remote-socket", "run/remote.sock"]);
+        let idx = s
+            .args
+            .iter()
+            .position(|a| a == "--remote-socket")
+            .expect("flag passed");
+        assert!(
+            Path::new(&s.args[idx + 1]).is_absolute(),
+            "{}",
+            s.args[idx + 1]
+        );
+        assert!(s.args[idx + 1].ends_with("run/remote.sock"));
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use clap::{Args, Parser, Subcommand};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::config::Config;
@@ -31,6 +32,43 @@ pub enum Commands {
 
     /// Run vej as a per-user background service (launchd on macOS, systemd --user on Linux)
     Service(ServiceArgs),
+
+    /// Manage access for clients on other machines
+    Remote(RemoteArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct RemoteArgs {
+    #[command(subcommand)]
+    pub command: RemoteCommands,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RemoteCommands {
+    /// Manage bearer tokens for remote clients
+    Token(TokenArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct TokenArgs {
+    #[command(subcommand)]
+    pub command: TokenCommands,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TokenCommands {
+    /// Create a token for a client and print it (it is shown only once)
+    Create {
+        /// Client name, e.g. laptop or ci-runner
+        name: String,
+    },
+    /// List client names that have tokens
+    List,
+    /// Revoke a client's token (takes effect immediately, no restart needed)
+    Revoke {
+        /// Client name
+        name: String,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -100,6 +138,10 @@ pub struct ServeArgs {
     #[arg(long, value_parser = parse_keep_alive, allow_hyphen_values = true)]
     pub idle_exit: Option<KeepAlive>,
 
+    /// Also serve the remote API on this Unix socket (for an OpenZiti sidecar or TLS proxy)
+    #[arg(long, value_name = "PATH")]
+    pub remote_socket: Option<PathBuf>,
+
     /// Extra browser origin allowed to call the API (repeatable), e.g. http://localhost:3000.
     /// The daemon's own origin is always allowed.
     #[arg(long = "allow-origin", value_name = "ORIGIN")]
@@ -129,6 +171,17 @@ pub struct ServeSettings {
     pub preload: bool,
     /// `Some` when the daemon should exit after this long without requests.
     pub idle_exit: Option<Duration>,
+    pub remote: RemoteSettings,
+}
+
+/// Effective `[remote]` settings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoteSettings {
+    pub socket: Option<PathBuf>,
+    pub tokens_file: PathBuf,
+    pub require_token: bool,
+    pub allow_model_selection: bool,
+    pub allow_keep_alive: bool,
 }
 
 impl ServeArgs {
@@ -156,6 +209,16 @@ impl ServeArgs {
             idle_exit: match self.idle_exit.unwrap_or(config.idle_exit) {
                 KeepAlive::For(d) if !d.is_zero() => Some(d),
                 KeepAlive::For(_) | KeepAlive::Forever => None,
+            },
+            remote: RemoteSettings {
+                socket: self
+                    .remote_socket
+                    .clone()
+                    .or_else(|| config.remote.socket.clone()),
+                tokens_file: config.remote.tokens_path(),
+                require_token: config.remote.require_token,
+                allow_model_selection: config.remote.allow_model_selection,
+                allow_keep_alive: config.remote.allow_keep_alive,
             },
         }
     }
@@ -370,6 +433,55 @@ mod tests {
         assert!(!install.force);
         assert_eq!(install.serve.model.as_deref(), Some("llama-3.2-1b"));
         assert_eq!(install.serve.port, Some(47831));
+    }
+
+    #[test]
+    fn remote_settings_combine_flag_and_config() {
+        let mut config = config();
+        config.remote.tokens_file = Some("/etc/vej/tokens".into());
+        config.remote.allow_model_selection = true;
+
+        let settings = serve_args(&["--remote-socket", "/tmp/vej-remote.sock"]).resolve(&config);
+
+        assert_eq!(
+            settings.remote.socket.as_deref(),
+            Some(std::path::Path::new("/tmp/vej-remote.sock"))
+        );
+        assert_eq!(
+            settings.remote.tokens_file,
+            std::path::PathBuf::from("/etc/vej/tokens")
+        );
+        assert!(settings.remote.require_token);
+        assert!(settings.remote.allow_model_selection);
+        assert!(!settings.remote.allow_keep_alive);
+    }
+
+    #[test]
+    fn remote_tokens_file_defaults_to_the_vej_config_dir() {
+        let settings = serve_args(&[]).resolve(&Config::default());
+        assert!(
+            settings.remote.tokens_file.ends_with("vej/remote_tokens"),
+            "{:?}",
+            settings.remote.tokens_file
+        );
+        assert_eq!(settings.remote.socket, None);
+    }
+
+    #[test]
+    fn parses_remote_token_commands() {
+        let cli = Cli::try_parse_from(["vej", "remote", "token", "create", "laptop"]).unwrap();
+        let Commands::Remote(RemoteArgs {
+            command:
+                RemoteCommands::Token(TokenArgs {
+                    command: TokenCommands::Create { name },
+                }),
+        }) = cli.command
+        else {
+            panic!("expected remote token create");
+        };
+        assert_eq!(name, "laptop");
+        assert!(Cli::try_parse_from(["vej", "remote", "token", "list"]).is_ok());
+        assert!(Cli::try_parse_from(["vej", "remote", "token", "revoke", "laptop"]).is_ok());
     }
 
     #[test]

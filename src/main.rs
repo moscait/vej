@@ -7,6 +7,7 @@ mod idle;
 mod keep_alive;
 mod model_manager;
 mod models;
+mod remote;
 mod server;
 mod service;
 #[cfg(test)]
@@ -19,6 +20,8 @@ use config::{Config, get_config_path, load_config, save_config};
 use engine::{DecisionEngine, DecisionRequest, EngineLoader};
 use model_manager::ModelManager;
 use models::{RECOMMENDED_MODELS, find_model_spec, get_cache_dir, pull_model, resolve_model_path};
+use remote::RemoteAuth;
+use remote::tokens::TokenStore;
 use std::path::Path;
 
 #[tokio::main]
@@ -41,6 +44,7 @@ async fn main() -> Result<()> {
         Commands::Models(args) => handle_models(args).await,
         Commands::Config(args) => handle_config(args),
         Commands::Service(args) => service::handle(args, config).await,
+        Commands::Remote(args) => remote::handle(args, &config),
     }
 }
 
@@ -62,6 +66,8 @@ async fn handle_serve(args: ServeArgs, config: Config) -> Result<()> {
         tracing::info!(?source, "Using the socket passed by the service manager");
     }
 
+    let remote = prepare_remote_access(&settings, &listener)?;
+
     let manager = ModelManager::new(loader, &settings.model, settings.keep_alive);
     // A socket-activated start may be a mere health probe; load on the first real request.
     if settings.preload && !source.is_activated() {
@@ -75,14 +81,62 @@ async fn handle_serve(args: ServeArgs, config: Config) -> Result<()> {
         "Model lifecycle configured"
     );
     let state = server::AppState::new(manager, settings.max_concurrent);
-    server::run_server(
-        state,
-        listener,
-        &settings.host,
-        &settings.allowed_origins,
-        settings.idle_exit,
-    )
-    .await
+    let options = server::ServeOptions {
+        host: settings.host.clone(),
+        allowed_origins: settings.allowed_origins.clone(),
+        idle_exit: settings.idle_exit,
+        remote_auth: remote.auth,
+        remote_policy: remote.policy,
+        remote_socket: remote.socket,
+    };
+    server::run_server(state, listener, options).await
+}
+
+struct RemoteAccess {
+    auth: std::sync::Arc<RemoteAuth>,
+    policy: server::ClientPolicy,
+    socket: Option<activation::OwnedUnixSocket>,
+}
+
+/// Validates remote access before any model loads: tokens must exist when remote clients
+/// can connect, and the remote socket is bound now so conflicts fail fast.
+fn prepare_remote_access(
+    settings: &cli::ServeSettings,
+    tcp: &std::net::TcpListener,
+) -> Result<RemoteAccess> {
+    let remote = &settings.remote;
+    let tcp_addr = tcp.local_addr()?;
+    let tcp_is_loopback = tcp_addr.ip().to_canonical().is_loopback();
+    let auth = RemoteAuth::new(TokenStore::open(&remote.tokens_file), remote.require_token);
+    if !tcp_is_loopback || remote.socket.is_some() {
+        auth.ensure_usable()?;
+    }
+    if !tcp_is_loopback {
+        tracing::warn!(
+            %tcp_addr,
+            "Listening beyond loopback: remote peers get the restricted API and need a bearer \
+             token. Traffic is plain HTTP; prefer OpenZiti or a TLS proxy on --remote-socket."
+        );
+    }
+    if !remote.require_token {
+        tracing::warn!(
+            "[remote] require_token = false: remote callers are not authenticated by vej"
+        );
+    }
+    let socket = remote
+        .socket
+        .as_deref()
+        .map(activation::bind_unix_socket)
+        .transpose()?;
+    Ok(RemoteAccess {
+        auth,
+        policy: server::ClientPolicy {
+            allow_model_selection: remote.allow_model_selection,
+            allow_keep_alive: remote.allow_keep_alive,
+            expose_internal_errors: false,
+        },
+        socket,
+    })
 }
 
 fn handle_decide(args: DecideArgs, config: Config) -> Result<()> {

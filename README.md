@@ -390,6 +390,50 @@ Logs go to `~/Library/Logs/vej/vej.log` on macOS and to `journalctl --user -u ve
 
 ---
 
+## 🔐 Remote Access
+
+By default `vej` listens on `127.0.0.1` and trusts only the local machine. Clients on other machines get a deliberately smaller **remote API**:
+
+| | Local (loopback) clients | Remote clients |
+| :--- | :--- | :--- |
+| Decisions, batch, generation, `/health`, `/v1/models`, `/v1/ps`, `/api/tags` | ✅ | ✅ with a bearer token |
+| Switch/unload models, `/v1/shutdown`, TypeSafe proxy, playground | ✅ | ❌ (404) |
+| Per-request `keep_alive` and `model` | ✅ | ignored unless enabled in `[remote]` |
+| Model-load error details (file paths) | shown | logged only |
+
+Remote clients reach `vej` in one of two ways:
+- **`--remote-socket <path>`** (recommended): a Unix socket, owner-only (`0600`), for an OpenZiti sidecar or a TLS reverse proxy. Loopback stays fully local.
+- **`--host 0.0.0.0`**: peers from other machines get the remote API, while the machine itself keeps the local API. Traffic is plain HTTP, so prefer OpenZiti or a TLS proxy.
+
+Remote clients authenticate with bearer tokens. Only SHA-256 digests are stored, and changes apply without a restart:
+
+```bash
+vej remote token create laptop    # prints the token once
+vej remote token list
+vej remote token revoke laptop    # effective immediately
+
+curl --unix-socket ~/.vej/remote.sock http://vej/v1/systemone \
+  -H "Authorization: Bearer $VEJ_TOKEN" -H "Content-Type: application/json" \
+  -d '{"state": "I was charged twice", "choices": ["refund", "shipping"]}'
+```
+
+The Dart client sends the token with `VejClient(baseUrl: ..., apiKey: token)`.
+
+```toml
+[remote]
+socket = "/Users/me/.vej/remote.sock"   # same as --remote-socket
+# tokens_file = "..."                   # default: <config dir>/vej/remote_tokens
+require_token = true                    # false only when e.g. OpenZiti authenticates callers
+allow_model_selection = false           # let remote requests pick a catalog model
+allow_keep_alive = false                # let remote requests pin or unload models
+```
+
+`vej` refuses to start when remote clients can connect, tokens are required, and none exist.
+
+> **Reverse proxies and tunnelers:** point them at `--remote-socket`, not at `127.0.0.1`. Anything that connects over loopback is treated as local.
+
+---
+
 ## 🧠 Advanced Use Cases & Complex Examples
 
 ### Example 1: Autonomous Agent Error-Recovery & Tool Dispatch (CLI)

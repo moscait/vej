@@ -28,7 +28,49 @@ pub struct Config {
     /// Exit after this long with no requests (0 or -1 = never). Meant for socket-activated
     /// services, which restart vej on the next connection.
     pub idle_exit: KeepAlive,
+    /// Access for clients on other machines (non-loopback peers or the remote socket).
+    pub remote: RemoteConfig,
     pub models: HashMap<String, ModelConfig>,
+}
+
+/// `[remote]`: how clients on other machines may use vej. Loopback clients are unaffected.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RemoteConfig {
+    /// Unix socket serving the remote API, for an OpenZiti sidecar or a TLS reverse proxy.
+    pub socket: Option<PathBuf>,
+    /// Bearer-token digests (default: `<config dir>/vej/remote_tokens`).
+    pub tokens_file: Option<PathBuf>,
+    /// Require a bearer token from remote clients. Disable only when another layer (such as
+    /// OpenZiti identities) authenticates callers.
+    pub require_token: bool,
+    /// Let remote requests name a catalog model, which can trigger a model switch.
+    pub allow_model_selection: bool,
+    /// Let remote requests set `keep_alive` (pin a model in memory, or unload it).
+    pub allow_keep_alive: bool,
+}
+
+impl Default for RemoteConfig {
+    fn default() -> Self {
+        Self {
+            socket: None,
+            tokens_file: None,
+            require_token: true,
+            allow_model_selection: false,
+            allow_keep_alive: false,
+        }
+    }
+}
+
+impl RemoteConfig {
+    pub fn tokens_path(&self) -> PathBuf {
+        self.tokens_file.clone().unwrap_or_else(|| {
+            dirs::config_dir()
+                .unwrap_or_else(|| PathBuf::from(".vej"))
+                .join("vej")
+                .join("remote_tokens")
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +97,7 @@ impl Default for Config {
             max_concurrent: DEFAULT_MAX_CONCURRENT,
             preload: true,
             idle_exit: KeepAlive::Forever,
+            remote: RemoteConfig::default(),
             models: HashMap::new(),
         }
     }
@@ -138,6 +181,35 @@ mod tests {
         assert_eq!(config.keep_alive, KeepAlive::For(Duration::from_secs(1800)));
         assert_eq!(config.max_concurrent, 4);
         assert!(!config.preload);
+    }
+
+    #[test]
+    fn remote_access_is_locked_down_by_default() {
+        let remote = Config::default().remote;
+        assert_eq!(remote.socket, None);
+        assert!(remote.require_token);
+        assert!(!remote.allow_model_selection);
+        assert!(!remote.allow_keep_alive);
+    }
+
+    #[test]
+    fn parses_remote_section() {
+        let config: Config = toml::from_str(
+            "port = 8080\n[remote]\nsocket = \"/run/vej/remote.sock\"\nrequire_token = false\n\
+             allow_keep_alive = true\ntokens_file = \"/etc/vej/tokens\"",
+        )
+        .unwrap();
+        assert_eq!(
+            config.remote.socket.as_deref(),
+            Some(Path::new("/run/vej/remote.sock"))
+        );
+        assert_eq!(
+            config.remote.tokens_file.as_deref(),
+            Some(Path::new("/etc/vej/tokens"))
+        );
+        assert!(!config.remote.require_token);
+        assert!(config.remote.allow_keep_alive);
+        assert!(!config.remote.allow_model_selection);
     }
 
     #[test]
