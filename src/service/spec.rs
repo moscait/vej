@@ -35,6 +35,13 @@ pub fn build_spec(
 ) -> Result<ServiceSpec> {
     let serve = &install.serve;
     let settings = serve.resolve(config);
+    if !settings.tcp {
+        bail!(
+            "--no-tcp can't be installed as a vej service: on-demand start and `vej service \
+             status` need the TCP port. Run `vej serve --no-tcp` under your own supervisor \
+             (zvej does this for OpenZiti)."
+        );
+    }
     if settings.idle_exit.is_some() && !install.on_demand {
         bail!(
             "--idle-exit needs --on-demand: without socket activation nothing restarts vej \
@@ -119,6 +126,9 @@ fn serve_args(serve: &ServeArgs, host: &str, port: u16) -> Vec<String> {
             .as_deref()
             .map(|p| absolute(&p.display().to_string())),
     );
+    if serve.remote_token_optional {
+        args.push("--remote-token-optional".into());
+    }
     for origin in &serve.allow_origins {
         push_option(&mut args, "--allow-origin", Some(origin.clone()));
     }
@@ -324,6 +334,24 @@ mod tests {
             s.args[idx + 1]
         );
         assert!(s.args[idx + 1].ends_with("run/remote.sock"));
+    }
+
+    #[test]
+    fn passes_remote_token_optional_through() {
+        let s = spec(&["--remote-socket", "/tmp/r.sock", "--remote-token-optional"]);
+        assert!(s.args.iter().any(|a| a == "--remote-token-optional"));
+        assert!(
+            !spec(&[])
+                .args
+                .iter()
+                .any(|a| a == "--remote-token-optional")
+        );
+    }
+
+    #[test]
+    fn refuses_socket_only_mode() {
+        let err = spec_with_env(&["--no-tcp", "--remote-socket", "/tmp/r.sock"], &[]).unwrap_err();
+        assert!(err.to_string().contains("--no-tcp"), "{err}");
     }
 
     #[test]

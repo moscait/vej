@@ -396,3 +396,55 @@ async fn local_router_still_honours_keep_alive_and_model_selection() {
     assert_eq!(probe.loads(), ["llama-3.2-1b"]);
     assert_eq!(probe.drops(), ["llama-3.2-1b"]);
 }
+
+/// Minimal HTTP/1.1 exchange over a Unix socket; returns the raw response.
+#[cfg(unix)]
+async fn unix_request(socket: &std::path::Path, method: &str, uri: &str) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::UnixStream::connect(socket).await.unwrap();
+    let request = format!(
+        "{method} {uri} HTTP/1.1\r\nHost: vej\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).await.unwrap();
+    response
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn socket_only_server_serves_the_remote_api_and_cleans_up() {
+    let tokens_file = temp_tokens_file();
+    let socket_path = tokens_file.with_file_name("r.sock");
+    let socket = crate::activation::bind_unix_socket(&socket_path).unwrap();
+    let (loader, _probe) = FakeLoader::new();
+    let state = AppState::new(
+        ModelManager::new(loader, "model-a", KeepAlive::default()),
+        2,
+    );
+    let options = ServeOptions {
+        host: "127.0.0.1".into(),
+        allowed_origins: Vec::new(),
+        idle_exit: None,
+        remote_auth: RemoteAuth::new(TokenStore::open(&tokens_file), false),
+        remote_policy: REMOTE,
+        remote_socket: Some(socket),
+    };
+    let server = tokio::spawn(run_server(Arc::clone(&state), None, options));
+
+    let health = unix_request(&socket_path, "GET", "/health").await;
+    assert!(health.starts_with("HTTP/1.1 200"), "{health}");
+    let unload = unix_request(&socket_path, "POST", "/v1/unload").await;
+    assert!(
+        unload.starts_with("HTTP/1.1 404"),
+        "admin routes stay hidden without TCP: {unload}"
+    );
+
+    state.shutdown.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(1), server)
+        .await
+        .expect("server stops promptly")
+        .unwrap()
+        .unwrap();
+    assert!(!socket_path.exists(), "socket file is removed on shutdown");
+}

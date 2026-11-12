@@ -50,6 +50,7 @@ async fn main() -> Result<()> {
 
 async fn handle_serve(args: ServeArgs, config: Config) -> Result<()> {
     let settings = args.resolve(&config);
+    settings.validate()?;
 
     // Fail fast on a missing/undownloaded model even when loading lazily.
     resolve_model_path(&settings.model)
@@ -61,16 +62,21 @@ async fn handle_serve(args: ServeArgs, config: Config) -> Result<()> {
         n_ctx: settings.n_ctx,
     };
     // Take the socket before loading anything so a busy port fails fast.
-    let (listener, source) = activation::listener(&settings.host, settings.port)?;
-    if source.is_activated() {
-        tracing::info!(?source, "Using the socket passed by the service manager");
-    }
+    let (listener, activated) = if settings.tcp {
+        let (listener, source) = activation::listener(&settings.host, settings.port)?;
+        if source.is_activated() {
+            tracing::info!(?source, "Using the socket passed by the service manager");
+        }
+        (Some(listener), source.is_activated())
+    } else {
+        (None, false)
+    };
 
-    let remote = prepare_remote_access(&settings, &listener)?;
+    let remote = prepare_remote_access(&settings, listener.as_ref())?;
 
     let manager = ModelManager::new(loader, &settings.model, settings.keep_alive);
     // A socket-activated start may be a mere health probe; load on the first real request.
-    if settings.preload && !source.is_activated() {
+    if settings.preload && !activated {
         drop(manager.acquire(None, None).await?);
     }
 
@@ -102,16 +108,21 @@ struct RemoteAccess {
 /// can connect, and the remote socket is bound now so conflicts fail fast.
 fn prepare_remote_access(
     settings: &cli::ServeSettings,
-    tcp: &std::net::TcpListener,
+    tcp: Option<&std::net::TcpListener>,
 ) -> Result<RemoteAccess> {
     let remote = &settings.remote;
-    let tcp_addr = tcp.local_addr()?;
-    let tcp_is_loopback = tcp_addr.ip().to_canonical().is_loopback();
+    let public_tcp = match tcp {
+        Some(listener) => {
+            let addr = listener.local_addr()?;
+            (!addr.ip().to_canonical().is_loopback()).then_some(addr)
+        }
+        None => None,
+    };
     let auth = RemoteAuth::new(TokenStore::open(&remote.tokens_file), remote.require_token);
-    if !tcp_is_loopback || remote.socket.is_some() {
+    if public_tcp.is_some() || remote.socket.is_some() {
         auth.ensure_usable()?;
     }
-    if !tcp_is_loopback {
+    if let Some(tcp_addr) = public_tcp {
         tracing::warn!(
             %tcp_addr,
             "Listening beyond loopback: remote peers get the restricted API and need a bearer \
@@ -120,7 +131,7 @@ fn prepare_remote_access(
     }
     if !remote.require_token {
         tracing::warn!(
-            "[remote] require_token = false: remote callers are not authenticated by vej"
+            "Remote bearer tokens are optional (--remote-token-optional or [remote] require_token = false): vej does not authenticate remote callers itself"
         );
     }
     let socket = remote

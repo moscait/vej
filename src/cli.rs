@@ -142,6 +142,16 @@ pub struct ServeArgs {
     #[arg(long, value_name = "PATH")]
     pub remote_socket: Option<PathBuf>,
 
+    /// Serve only the remote socket: open no TCP port (needs a remote socket). The local
+    /// admin API and playground are then unavailable; stop vej with SIGTERM.
+    #[arg(long)]
+    pub no_tcp: bool,
+
+    /// Don't require a bearer token on the remote API, for when another layer (e.g. OpenZiti)
+    /// already authenticates callers. A token that is presented must still be valid.
+    #[arg(long)]
+    pub remote_token_optional: bool,
+
     /// Extra browser origin allowed to call the API (repeatable), e.g. http://localhost:3000.
     /// The daemon's own origin is always allowed.
     #[arg(long = "allow-origin", value_name = "ORIGIN")]
@@ -162,6 +172,8 @@ pub struct ServeSettings {
     pub model: String,
     pub host: String,
     pub port: u16,
+    /// Whether to listen on `host:port` at all (false with `--no-tcp`).
+    pub tcp: bool,
     pub allowed_origins: Vec<String>,
     pub n_gpu_layers: u32,
     pub threads: u32,
@@ -199,6 +211,7 @@ impl ServeArgs {
                 .unwrap_or_else(|| config.default_model.clone()),
             host: self.host.clone().unwrap_or_else(|| config.host.clone()),
             port: self.port.unwrap_or(config.port),
+            tcp: !self.no_tcp,
             allowed_origins,
             n_gpu_layers: self.gpu_layers.unwrap_or(config.n_gpu_layers),
             threads: self.threads.unwrap_or(config.threads),
@@ -216,11 +229,24 @@ impl ServeArgs {
                     .clone()
                     .or_else(|| config.remote.socket.clone()),
                 tokens_file: config.remote.tokens_path(),
-                require_token: config.remote.require_token,
+                require_token: config.remote.require_token && !self.remote_token_optional,
                 allow_model_selection: config.remote.allow_model_selection,
                 allow_keep_alive: config.remote.allow_keep_alive,
             },
         }
+    }
+}
+
+impl ServeSettings {
+    /// Rejects combinations that would leave vej unreachable.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if !self.tcp && self.remote.socket.is_none() {
+            anyhow::bail!(
+                "--no-tcp needs a remote socket: pass --remote-socket <PATH> or set \
+                 `socket` under [remote]"
+            );
+        }
+        Ok(())
     }
 }
 
@@ -454,6 +480,54 @@ mod tests {
         assert!(settings.remote.require_token);
         assert!(settings.remote.allow_model_selection);
         assert!(!settings.remote.allow_keep_alive);
+    }
+
+    #[test]
+    fn tcp_listener_and_required_tokens_are_the_defaults() {
+        let settings = serve_args(&[]).resolve(&config());
+        assert!(settings.tcp);
+        assert!(settings.remote.require_token);
+        assert!(settings.validate().is_ok());
+    }
+
+    #[test]
+    fn socket_only_mode_with_optional_remote_tokens() {
+        let settings = serve_args(&[
+            "--no-tcp",
+            "--remote-socket",
+            "/tmp/vej-remote.sock",
+            "--remote-token-optional",
+        ])
+        .resolve(&config());
+
+        assert!(!settings.tcp);
+        assert!(!settings.remote.require_token);
+        assert!(settings.validate().is_ok());
+    }
+
+    #[test]
+    fn no_tcp_needs_a_remote_socket_from_flag_or_config() {
+        let err = serve_args(&["--no-tcp"])
+            .resolve(&config())
+            .validate()
+            .unwrap_err();
+        assert!(err.to_string().contains("--remote-socket"), "{err}");
+
+        let mut config = config();
+        config.remote.socket = Some("/run/vej/remote.sock".into());
+        assert!(
+            serve_args(&["--no-tcp"])
+                .resolve(&config)
+                .validate()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn config_can_also_make_remote_tokens_optional() {
+        let mut config = config();
+        config.remote.require_token = false;
+        assert!(!serve_args(&[]).resolve(&config).remote.require_token);
     }
 
     #[test]

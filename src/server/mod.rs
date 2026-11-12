@@ -204,66 +204,96 @@ pub struct ServeOptions {
 /// Serves until Ctrl-C, SIGTERM, `POST /v1/shutdown`, or `idle_exit` without requests.
 /// On `tcp` (bound by vej or handed over by launchd/systemd) loopback peers get the full
 /// API and other peers the remote API; the remote socket always gets the remote API.
+/// Without `tcp` (`--no-tcp`) only the remote socket is served.
 pub async fn run_server<L>(
     state: Arc<AppState<L>>,
-    tcp: std::net::TcpListener,
+    tcp: Option<std::net::TcpListener>,
     options: ServeOptions,
 ) -> Result<()>
 where
     L: ModelLoader,
     L::Model: DecisionModel,
 {
-    tcp.set_nonblocking(true)?;
-    let tcp = tokio::net::TcpListener::from_std(tcp)?;
-    let port = tcp.local_addr()?.port();
-    let access = Arc::new(AccessPolicy::new(
-        &options.host,
-        port,
-        &options.allowed_origins,
-    ));
-    let local = build_local_router(Arc::clone(&state), access);
     let remote = build_remote_router(
         Arc::clone(&state),
         options.remote_auth,
         options.remote_policy,
     );
-    let tcp_app = dispatch_by_peer(local, remote.clone());
+    let tcp = match tcp {
+        Some(listener) => {
+            listener.set_nonblocking(true)?;
+            let listener = tokio::net::TcpListener::from_std(listener)?;
+            let port = listener.local_addr()?.port();
+            let access = Arc::new(AccessPolicy::new(
+                &options.host,
+                port,
+                &options.allowed_origins,
+            ));
+            let local = build_local_router(Arc::clone(&state), access);
+            Some((listener, dispatch_by_peer(local, remote.clone())))
+        }
+        None => None,
+    };
     if let Some(idle) = options.idle_exit {
         tracing::info!(idle = ?idle, "Will exit after this long without requests");
         spawn_idle_exit(Arc::clone(&state), idle);
     }
+    let port = match &tcp {
+        Some((listener, _)) => Some(listener.local_addr()?.port()),
+        None => None,
+    };
     print_banner(&options.host, port, options.remote_socket.as_ref());
 
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
     tokio::spawn(trigger_shutdown(Arc::clone(&state), stop_tx));
-    let tcp_stop = stop_rx.clone();
-    let tcp_server = async move {
-        axum::serve(
-            tcp,
-            tcp_app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .with_graceful_shutdown(stopped(tcp_stop))
-        .await
-        .map_err(anyhow::Error::from)
-    };
+    let tcp_server = serve_tcp(tcp, stop_rx.clone());
     let remote_server = serve_remote_socket(options.remote_socket, remote, stop_rx);
     tokio::try_join!(tcp_server, remote_server)?;
     Ok(())
 }
 
-fn print_banner(host: &str, port: u16, remote_socket: Option<&OwnedUnixSocket>) {
-    let addr = format!("{host}:{port}");
-    tracing::info!("vej Jev-compatible server listening on http://{addr}");
-    println!("🚀 vej decision & generation daemon running at http://{addr}");
+async fn serve_tcp(
+    tcp: Option<(tokio::net::TcpListener, Router)>,
+    stop: tokio::sync::watch::Receiver<bool>,
+) -> Result<()> {
+    let Some((listener, app)) = tcp else {
+        return Ok(());
+    };
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(stopped(stop))
+    .await?;
+    Ok(())
+}
+
+fn print_banner(host: &str, port: Option<u16>, remote_socket: Option<&OwnedUnixSocket>) {
+    match port {
+        Some(port) => {
+            let addr = format!("{host}:{port}");
+            tracing::info!("vej Jev-compatible server listening on http://{addr}");
+            println!("🚀 vej decision & generation daemon running at http://{addr}");
+        }
+        None => {
+            tracing::info!("vej serving the remote socket only (no TCP listener)");
+            println!(
+                "🚀 vej decision & generation daemon running without TCP (remote socket only)"
+            );
+        }
+    }
     println!("📌 POST /v1/systemone       - Evaluate typed decisions");
     println!("📌 POST /v1/systemone/batch - Evaluate batched decisions in a single call");
     println!("📌 POST /v1/generate        - Generate text / JSON from the active GGUF model");
     println!("📌 GET  /v1/models          - List configured models");
-    println!("📌 POST /v1/models/switch   - Hot-switch active model (local only)");
     println!("📌 GET  /v1/ps              - Show the loaded model and when it unloads");
-    println!("📌 POST /v1/unload          - Release the loaded model now (local only)");
-    println!("📌 POST /v1/shutdown        - Gracefully stop the vej daemon (local only)");
-    println!("✨ Web Playground           - http://{addr}/playground (local only)");
+    if let Some(port) = port {
+        let addr = format!("{host}:{port}");
+        println!("📌 POST /v1/models/switch   - Hot-switch active model (local only)");
+        println!("📌 POST /v1/unload          - Release the loaded model now (local only)");
+        println!("📌 POST /v1/shutdown        - Gracefully stop the vej daemon (local only)");
+        println!("✨ Web Playground           - http://{addr}/playground (local only)");
+    }
     #[cfg(unix)]
     if let Some(socket) = remote_socket {
         println!("🔌 Remote API socket        - {}", socket.path().display());
