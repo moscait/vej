@@ -49,30 +49,35 @@ class VejPresets {
       state: resumeOrProfile,
       questions: {
         'engineering_depth': QuestionSpec.score(
-          instructions: 'Assess the depth of systems engineering and CS fundamentals.',
+          instructions:
+              'Assess the depth of systems engineering and CS fundamentals.',
           criteria: {
             '0': 'Junior or superficial experience',
             '1': 'Basic application logic and standard CRUD APIs',
             '2': 'Competent mid-level developer',
             '3': 'Senior engineer with architectural ownership',
             '4': 'Staff engineer with multi-system distributed architecture',
-            '5': 'Distinguished / Principal engineer driving breakthrough systems',
+            '5':
+                'Distinguished / Principal engineer driving breakthrough systems',
           },
         ),
         'talent_profile': QuestionSpec.choice(
           instructions: 'Identify the candidate primary archetype.',
           criteria: {
-            'systems_builder': 'Core backend, databases, memory performance, kernels',
-            'product_engineer': 'Fullstack web, Flutter/mobile, user experience',
-            'ml_practitioner': 'Model training, fine-tuning, embeddings, logit evaluation',
+            'systems_builder':
+                'Core backend, databases, memory performance, kernels',
+            'product_engineer':
+                'Fullstack web, Flutter/mobile, user experience',
+            'ml_practitioner':
+                'Model training, fine-tuning, embeddings, logit evaluation',
             'engineering_leader': 'Team lead, management, mentorship, culture',
           },
         ),
         'immediate_interview': QuestionSpec.noul(
-          instructions: 'Should this candidate be fast-tracked to an immediate interview?',
+          instructions:
+              'Should this candidate be fast-tracked to an immediate interview?',
         ),
       },
     );
   }
 }
-

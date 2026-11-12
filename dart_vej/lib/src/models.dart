@@ -60,7 +60,10 @@ class QuestionSpec {
     return QuestionSpec(
       type: json['type'] as String? ?? 'choice',
       instructions: json['instructions'],
-      criteria: json['criteria'] ?? json['options'] ?? json['choices'] ?? json['levels'],
+      criteria: json['criteria'] ??
+          json['options'] ??
+          json['choices'] ??
+          json['levels'],
     );
   }
 }
@@ -324,7 +327,10 @@ class ModelInfo {
       vendor: json['vendor'] as String,
       country: json['country'] as String,
       sizeGb: (json['size_gb'] as num).toDouble(),
-      aliases: (json['aliases'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [],
+      aliases: (json['aliases'] as List<dynamic>?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          [],
       isDownloaded: json['is_downloaded'] as bool? ?? false,
       isActive: json['is_active'] as bool? ?? false,
     );
@@ -351,4 +357,3 @@ class DaemonStatus {
     );
   }
 }
-

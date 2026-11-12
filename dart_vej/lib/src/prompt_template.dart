@@ -9,7 +9,22 @@ enum TemplateStyle {
 /// Helper for constructing identical assistant turn primed prompts.
 class PromptBuilder {
   static const List<String> letters = [
-    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P'
+    'A',
+    'B',
+    'C',
+    'D',
+    'E',
+    'F',
+    'G',
+    'H',
+    'I',
+    'J',
+    'K',
+    'L',
+    'M',
+    'N',
+    'O',
+    'P'
   ];
 
   /// Builds a decision prompt string with assistant turn priming ('Answer: ').
@@ -23,8 +38,8 @@ class PromptBuilder {
         choices.any((c) => c.key.toLowerCase() == 'true') &&
         choices.any((c) => c.key.toLowerCase() == 'false');
 
-    final isNumeric = !isBoolean &&
-        choices.every((c) => int.tryParse(c.key) != null);
+    final isNumeric =
+        !isBoolean && choices.every((c) => int.tryParse(c.key) != null);
 
     String systemMsg;
     String formattedOptions;
@@ -65,7 +80,8 @@ class PromptBuilder {
       selectionPrompt = 'Select the best option from [$letterList]:';
     }
 
-    final taskInstr = instruction ?? 'Analyze the state and choose the single best option.';
+    final taskInstr =
+        instruction ?? 'Analyze the state and choose the single best option.';
 
     switch (template) {
       case TemplateStyle.llama3:
@@ -79,4 +95,3 @@ class PromptBuilder {
     }
   }
 }
-

@@ -40,7 +40,9 @@ class VejClient {
     this.apiKey,
     this.timeout = const Duration(seconds: 30),
     http.Client? httpClient,
-  })  : baseUrl = Uri.parse(baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl),
+  })  : baseUrl = Uri.parse(baseUrl.endsWith('/')
+            ? baseUrl.substring(0, baseUrl.length - 1)
+            : baseUrl),
         _httpClient = httpClient ?? http.Client();
 
   /// Creates a client targeting the hosted TypeSafe AI Jev endpoint.
@@ -171,7 +173,8 @@ class VejClient {
     if (res is DecisionResult) {
       return res;
     }
-    throw const VejException('Expected flat DecisionResult, received JevResult.');
+    throw const VejException(
+        'Expected flat DecisionResult, received JevResult.');
   }
 
   /// Evaluates a boolean 'noul' question (Yes / No probability).
@@ -253,7 +256,8 @@ class VejClient {
     if (res is JevResult) {
       return res;
     }
-    throw const VejException('Expected JevResult, received flat DecisionResult.');
+    throw const VejException(
+        'Expected JevResult, received flat DecisionResult.');
   }
 
   /// Generic evaluation endpoint supporting either flat [DecisionResult] or multi-question [JevResult].
@@ -294,4 +298,3 @@ class VejClient {
     }
   }
 }
-

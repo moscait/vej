@@ -35,4 +35,3 @@ class VejValidationException extends VejException {
   @override
   String toString() => 'VejValidationException: $message';
 }
-
