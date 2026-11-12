@@ -1,15 +1,20 @@
+mod access;
 mod cli;
 mod config;
 mod engine;
+mod keep_alive;
+mod model_manager;
 mod models;
-mod access;
 mod server;
+#[cfg(test)]
+mod test_support;
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use cli::{Cli, Commands, ConfigCommands, DecideArgs, ModelsCommands, ServeArgs};
 use config::{Config, get_config_path, load_config, save_config};
-use engine::{DecisionEngine, DecisionRequest};
+use engine::{DecisionEngine, DecisionRequest, EngineLoader};
+use model_manager::ModelManager;
 use models::{RECOMMENDED_MODELS, find_model_spec, get_cache_dir, pull_model, resolve_model_path};
 use std::path::Path;
 
@@ -18,7 +23,10 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
-    let config = load_config().unwrap_or_default();
+    let config = load_config().unwrap_or_else(|e| {
+        eprintln!("Warning: {e:#}. Falling back to default configuration.");
+        Config::default()
+    });
 
     match cli.command {
         Commands::Serve(args) => handle_serve(args, config).await,
@@ -29,47 +37,47 @@ async fn main() -> Result<()> {
 }
 
 async fn handle_serve(args: ServeArgs, config: Config) -> Result<()> {
-    let model_query = args
-        .model
-        .as_deref()
-        .unwrap_or(&config.default_model);
+    let settings = args.resolve(&config);
 
-    let model_path = resolve_model_path(model_query)
-        .with_context(|| format!("Could not resolve model '{}'", model_query))?;
+    // Fail fast on a missing/undownloaded model even when loading lazily.
+    resolve_model_path(&settings.model)
+        .with_context(|| format!("Could not resolve model '{}'", settings.model))?;
 
-    let spec = find_model_spec(model_query);
-    let id_str = spec.map(|s| s.id).unwrap_or(model_query).to_string();
-    let tmpl = spec.map(|s| s.template);
+    let loader = EngineLoader {
+        n_gpu_layers: settings.n_gpu_layers,
+        threads: settings.threads,
+        n_ctx: settings.n_ctx,
+    };
+    let manager = ModelManager::new(loader, &settings.model, settings.keep_alive);
+    if settings.preload {
+        drop(manager.acquire(None, None).await?);
+    }
 
-    let n_gpu_layers = args.gpu_layers.unwrap_or(config.n_gpu_layers);
-    let threads = args.threads.unwrap_or(config.threads);
-
-    let engine = DecisionEngine::load(
-        &model_path,
-        id_str,
-        tmpl,
-        n_gpu_layers,
-        threads,
-        config.n_ctx,
-    )?;
-
-    let mut allowed_origins = config.allowed_origins.clone();
-    allowed_origins.extend(args.allow_origins.iter().cloned());
-
-    server::run_server(engine, config, &args.host, args.port, &allowed_origins).await?;
-    Ok(())
+    tracing::info!(
+        keep_alive = %settings.keep_alive,
+        max_concurrent = settings.max_concurrent,
+        preload = settings.preload,
+        "Model lifecycle configured"
+    );
+    let state = server::AppState::new(manager, settings.max_concurrent);
+    server::run_server(
+        state,
+        &settings.host,
+        settings.port,
+        &settings.allowed_origins,
+    )
+    .await
 }
 
 fn handle_decide(args: DecideArgs, config: Config) -> Result<()> {
     if args.choices.is_empty() {
-        eprintln!("Error: At least one candidate choice must be provided via -c or --choices (e.g. -c 'refund,support,billing')");
+        eprintln!(
+            "Error: At least one candidate choice must be provided via -c or --choices (e.g. -c 'refund,support,billing')"
+        );
         std::process::exit(1);
     }
 
-    let model_query = args
-        .model
-        .as_deref()
-        .unwrap_or(&config.default_model);
+    let model_query = args.model.as_deref().unwrap_or(&config.default_model);
 
     let model_path = resolve_model_path(model_query)
         .with_context(|| format!("Could not resolve model '{}'", model_query))?;
@@ -101,7 +109,9 @@ fn handle_decide(args: DecideArgs, config: Config) -> Result<()> {
         std::io::stdin().read_to_string(&mut buffer)?;
         buffer.trim().to_string()
     } else {
-        eprintln!("Error: Input state must be provided either as a positional argument, via --state, or piped into stdin.");
+        eprintln!(
+            "Error: Input state must be provided either as a positional argument, via --state, or piped into stdin."
+        );
         std::process::exit(1);
     };
 
@@ -117,6 +127,7 @@ fn handle_decide(args: DecideArgs, config: Config) -> Result<()> {
         instruction: args.instruction,
         questions: None,
         temperature: args.temperature,
+        keep_alive: None,
     };
 
     let res = engine.evaluate_unified(&req)?;
@@ -127,8 +138,14 @@ fn handle_decide(args: DecideArgs, config: Config) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&flat)?);
             } else {
                 println!("\n⚡ Decision: \x1b[1;32m{}\x1b[0m", flat.decision);
-                println!("🎯 Confidence: \x1b[1;36m{:.2}%\x1b[0m", flat.confidence * 100.0);
-                println!("⏱️  Latency: \x1b[1;33m{:.2} ms\x1b[0m ({} tokens evaluated)", flat.latency_ms, flat.tokens_evaluated);
+                println!(
+                    "🎯 Confidence: \x1b[1;36m{:.2}%\x1b[0m",
+                    flat.confidence * 100.0
+                );
+                println!(
+                    "⏱️  Latency: \x1b[1;33m{:.2} ms\x1b[0m ({} tokens evaluated)",
+                    flat.latency_ms, flat.tokens_evaluated
+                );
                 println!("🤖 Model: {}", flat.model);
                 println!("\n📊 Distribution:");
                 let mut sorted_probs: Vec<_> = flat.probabilities.iter().collect();

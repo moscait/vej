@@ -1,7 +1,14 @@
 use clap::{Args, Parser, Subcommand};
 
+use crate::config::Config;
+use crate::keep_alive::KeepAlive;
+
 #[derive(Parser, Debug)]
-#[command(name = "vej", version, about = "High-performance, local System-1 AI decision engine competing with Jev")]
+#[command(
+    name = "vej",
+    version,
+    about = "High-performance, local System-1 AI decision engine competing with Jev"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -28,13 +35,25 @@ pub struct ServeArgs {
     #[arg(short, long)]
     pub model: Option<String>,
 
-    /// Host interface to bind to
-    #[arg(long, default_value = "127.0.0.1")]
-    pub host: String,
+    /// Host interface to bind to (default: config `host`, 127.0.0.1)
+    #[arg(long)]
+    pub host: Option<String>,
 
-    /// Port to listen on
-    #[arg(short, long, default_value_t = 8080)]
-    pub port: u16,
+    /// Port to listen on (default: config `port`, 8080)
+    #[arg(short, long)]
+    pub port: Option<u16>,
+
+    /// How long an idle model stays loaded: e.g. 5m, 1h, 0 (unload after each request), -1 (never)
+    #[arg(long, value_parser = parse_keep_alive, allow_hyphen_values = true)]
+    pub keep_alive: Option<KeepAlive>,
+
+    /// Maximum concurrent inferences (each allocates its own KV cache)
+    #[arg(long)]
+    pub max_concurrent: Option<usize>,
+
+    /// Don't load the model at startup; load it on the first request instead
+    #[arg(long)]
+    pub no_preload: bool,
 
     /// Extra browser origin allowed to call the API (repeatable), e.g. http://localhost:3000.
     /// The daemon's own origin is always allowed.
@@ -48,6 +67,51 @@ pub struct ServeArgs {
     /// Number of CPU threads
     #[arg(short, long)]
     pub threads: Option<u32>,
+}
+
+/// Effective `serve` settings after applying CLI flags over the config file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ServeSettings {
+    pub model: String,
+    pub host: String,
+    pub port: u16,
+    pub allowed_origins: Vec<String>,
+    pub n_gpu_layers: u32,
+    pub threads: u32,
+    pub n_ctx: u32,
+    pub keep_alive: KeepAlive,
+    pub max_concurrent: usize,
+    pub preload: bool,
+}
+
+impl ServeArgs {
+    pub fn resolve(&self, config: &Config) -> ServeSettings {
+        let allowed_origins = config
+            .allowed_origins
+            .iter()
+            .chain(&self.allow_origins)
+            .cloned()
+            .collect();
+        ServeSettings {
+            model: self
+                .model
+                .clone()
+                .unwrap_or_else(|| config.default_model.clone()),
+            host: self.host.clone().unwrap_or_else(|| config.host.clone()),
+            port: self.port.unwrap_or(config.port),
+            allowed_origins,
+            n_gpu_layers: self.gpu_layers.unwrap_or(config.n_gpu_layers),
+            threads: self.threads.unwrap_or(config.threads),
+            n_ctx: config.n_ctx,
+            keep_alive: self.keep_alive.unwrap_or(config.keep_alive),
+            max_concurrent: self.max_concurrent.unwrap_or(config.max_concurrent),
+            preload: config.preload && !self.no_preload,
+        }
+    }
+}
+
+fn parse_keep_alive(value: &str) -> Result<KeepAlive, String> {
+    KeepAlive::parse(value).map_err(|e| e.to_string())
 }
 
 #[derive(Args, Debug)]
@@ -123,4 +187,84 @@ pub enum ConfigCommands {
     },
     /// Print current config path
     Path,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::keep_alive::KeepAlive;
+    use std::time::Duration;
+
+    fn serve_args(argv: &[&str]) -> ServeArgs {
+        let cli = Cli::try_parse_from(["vej", "serve"].iter().chain(argv)).unwrap();
+        match cli.command {
+            Commands::Serve(args) => args,
+            other => panic!("expected serve, got {other:?}"),
+        }
+    }
+
+    fn config() -> Config {
+        Config {
+            host: "0.0.0.0".into(),
+            port: 9000,
+            keep_alive: KeepAlive::For(Duration::from_secs(60)),
+            max_concurrent: 3,
+            preload: true,
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn serve_uses_config_values_when_flags_are_omitted() {
+        let settings = serve_args(&[]).resolve(&config());
+        assert_eq!(settings.host, "0.0.0.0");
+        assert_eq!(settings.port, 9000);
+        assert_eq!(settings.keep_alive, KeepAlive::For(Duration::from_secs(60)));
+        assert_eq!(settings.max_concurrent, 3);
+        assert!(settings.preload);
+        assert_eq!(settings.model, Config::default().default_model);
+    }
+
+    #[test]
+    fn serve_flags_override_config() {
+        let args = serve_args(&[
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8181",
+            "--keep-alive",
+            "-1",
+            "--max-concurrent",
+            "1",
+            "--no-preload",
+            "-m",
+            "gemma-2-2b",
+        ]);
+        let settings = args.resolve(&config());
+        assert_eq!(settings.host, "127.0.0.1");
+        assert_eq!(settings.port, 8181);
+        assert_eq!(settings.keep_alive, KeepAlive::Forever);
+        assert_eq!(settings.max_concurrent, 1);
+        assert!(!settings.preload);
+        assert_eq!(settings.model, "gemma-2-2b");
+    }
+
+    #[test]
+    fn allowed_origins_combine_config_and_flags() {
+        let config = Config {
+            allowed_origins: vec!["http://localhost:3000".into()],
+            ..Config::default()
+        };
+        let args = serve_args(&["--allow-origin", "http://wordstudy.local:9000"]);
+        assert_eq!(
+            args.resolve(&config).allowed_origins,
+            ["http://localhost:3000", "http://wordstudy.local:9000"]
+        );
+    }
+
+    #[test]
+    fn serve_rejects_malformed_keep_alive() {
+        assert!(Cli::try_parse_from(["vej", "serve", "--keep-alive", "soon"]).is_err());
+    }
 }

@@ -61,12 +61,7 @@ pub static RECOMMENDED_MODELS: &[ModelSpec] = &[
         vendor: "Meta",
         country: "USA",
         size_gb: 2.02,
-        aliases: &[
-            "llama-3.2-3b",
-            "llama3.2-3b",
-            "llama-3b",
-            "meta-3b",
-        ],
+        aliases: &["llama-3.2-3b", "llama3.2-3b", "llama-3b", "meta-3b"],
         hf_url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
         filename: "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
         template: TemplateStyle::Llama3,
@@ -77,12 +72,7 @@ pub static RECOMMENDED_MODELS: &[ModelSpec] = &[
         vendor: "Meta",
         country: "USA",
         size_gb: 4.92,
-        aliases: &[
-            "llama-3.1-8b",
-            "llama3.1-8b",
-            "llama-8b",
-            "meta-8b",
-        ],
+        aliases: &["llama-3.1-8b", "llama3.1-8b", "llama-8b", "meta-8b"],
         hf_url: "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
         filename: "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
         template: TemplateStyle::Llama3,
@@ -195,7 +185,10 @@ pub async fn pull_model(query: &str) -> Result<PathBuf> {
 
     let dest_file = dest_dir.join(spec.filename);
     if dest_file.exists() {
-        println!("Model '{}' is already downloaded at {:?}", spec.id, dest_file);
+        println!(
+            "Model '{}' is already downloaded at {:?}",
+            spec.id, dest_file
+        );
         return Ok(dest_file);
     }
 
@@ -234,7 +227,11 @@ pub async fn pull_model(query: &str) -> Result<PathBuf> {
         .with_context(|| format!("Failed to create temporary file {:?}", temp_file))?;
 
     let mut res = res;
-    while let Some(chunk) = res.chunk().await.with_context(|| "Error reading chunk from stream")? {
+    while let Some(chunk) = res
+        .chunk()
+        .await
+        .with_context(|| "Error reading chunk from stream")?
+    {
         file.write_all(&chunk)
             .with_context(|| "Error writing to temporary file")?;
         pb.inc(chunk.len() as u64);

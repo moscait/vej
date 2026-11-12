@@ -3,7 +3,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::keep_alive::KeepAlive;
+
+/// Concurrent inferences allowed by default; each allocates its own KV cache.
+const DEFAULT_MAX_CONCURRENT: usize = 2;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
     pub default_model: String,
     pub host: String,
@@ -13,8 +19,12 @@ pub struct Config {
     pub n_ctx: u32,
     /// Extra browser origins allowed to call the daemon (e.g. "http://localhost:3000").
     /// The daemon's own origin and its loopback aliases are always allowed.
-    #[serde(default)]
     pub allowed_origins: Vec<String>,
+    /// How long an idle model stays loaded (e.g. "5m", "1h", 0 = unload immediately, -1 = never).
+    pub keep_alive: KeepAlive,
+    pub max_concurrent: usize,
+    /// Load the default model at startup instead of on the first request.
+    pub preload: bool,
     pub models: HashMap<String, ModelConfig>,
 }
 
@@ -38,6 +48,9 @@ impl Default for Config {
             n_gpu_layers: 99,
             n_ctx: 2048,
             allowed_origins: Vec::new(),
+            keep_alive: KeepAlive::default(),
+            max_concurrent: DEFAULT_MAX_CONCURRENT,
+            preload: true,
             models: HashMap::new(),
         }
     }
@@ -77,4 +90,57 @@ pub fn save_config(config: &Config, path: &Path) -> Result<()> {
     let content = toml::to_string_pretty(config)?;
     std::fs::write(path, content)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::keep_alive::KeepAlive;
+    use std::time::Duration;
+
+    #[test]
+    fn config_files_written_before_lifecycle_settings_still_parse() {
+        let legacy = r#"
+            default_model = "llama-3.2-3b"
+            host = "127.0.0.1"
+            port = 9090
+            threads = 8
+            n_gpu_layers = 99
+            n_ctx = 2048
+
+            [models.llama-3.2-1b]
+        "#;
+
+        let config: Config = toml::from_str(legacy).unwrap();
+
+        assert_eq!(config.default_model, "llama-3.2-3b");
+        assert_eq!(config.port, 9090);
+        assert_eq!(config.keep_alive, KeepAlive::default());
+        assert_eq!(config.max_concurrent, Config::default().max_concurrent);
+        assert!(config.preload);
+    }
+
+    #[test]
+    fn partial_config_falls_back_to_defaults() {
+        let config: Config = toml::from_str("port = 7070").unwrap();
+        assert_eq!(config.port, 7070);
+        assert_eq!(config.default_model, Config::default().default_model);
+    }
+
+    #[test]
+    fn parses_lifecycle_settings() {
+        let config: Config =
+            toml::from_str("keep_alive = \"30m\"\nmax_concurrent = 4\npreload = false").unwrap();
+        assert_eq!(config.keep_alive, KeepAlive::For(Duration::from_secs(1800)));
+        assert_eq!(config.max_concurrent, 4);
+        assert!(!config.preload);
+    }
+
+    #[test]
+    fn default_config_round_trips_through_toml() {
+        let text = toml::to_string_pretty(&Config::default()).unwrap();
+        let parsed: Config = toml::from_str(&text).unwrap();
+        assert_eq!(parsed.keep_alive, KeepAlive::default());
+        assert_eq!(parsed.port, Config::default().port);
+    }
 }

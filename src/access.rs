@@ -64,7 +64,11 @@ impl AccessPolicy {
         }
         allowed_origins.dedup();
 
-        Self { port, allowed_origins, extra_hosts }
+        Self {
+            port,
+            allowed_origins,
+            extra_hosts,
+        }
     }
 
     /// Returns true if the `Host` header value is acceptable.
@@ -73,14 +77,14 @@ impl AccessPolicy {
         if hostname == "localhost" || is_ip_literal(&hostname) {
             return true;
         }
-        self.extra_hosts.iter().any(|h| *h == hostname)
+        self.extra_hosts.contains(&hostname)
     }
 
     /// Returns true if a browser request with this `Origin` may proceed.
     /// `host_header` is the request's (already validated) `Host`.
     pub fn origin_allowed(&self, origin: &str, host_header: Option<&str>) -> bool {
         let origin = normalize_origin(origin);
-        if self.allowed_origins.iter().any(|o| *o == origin) {
+        if self.allowed_origins.contains(&origin) {
             return true;
         }
         // Same-origin: the page was served by this daemon under the Host the
@@ -102,7 +106,10 @@ impl AccessPolicy {
         CorsLayer::new()
             .allow_origin(AllowOrigin::predicate(
                 move |origin: &HeaderValue, parts| {
-                    let host = parts.headers.get(header::HOST).and_then(|v| v.to_str().ok());
+                    let host = parts
+                        .headers
+                        .get(header::HOST)
+                        .and_then(|v| v.to_str().ok());
                     origin
                         .to_str()
                         .map(|o| policy.origin_allowed(o, host))
@@ -118,10 +125,10 @@ impl AccessPolicy {
             Some(v) => Some(v.to_str().map_err(|_| "invalid Host header")?),
             None => None,
         };
-        if let Some(h) = host {
-            if !self.host_allowed(h) {
-                return Err("Host not allowed");
-            }
+        if let Some(h) = host
+            && !self.host_allowed(h)
+        {
+            return Err("Host not allowed");
         }
         if let Some(origin) = headers.get(header::ORIGIN) {
             let origin = origin.to_str().map_err(|_| "invalid Origin header")?;
@@ -134,11 +141,7 @@ impl AccessPolicy {
 }
 
 /// Axum middleware enforcing [`AccessPolicy`].
-pub async fn guard(
-    State(policy): State<Arc<AccessPolicy>>,
-    req: Request,
-    next: Next,
-) -> Response {
+pub async fn guard(State(policy): State<Arc<AccessPolicy>>, req: Request, next: Next) -> Response {
     match policy.check(req.headers()) {
         Ok(()) => next.run(req).await,
         Err(reason) => {
