@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 /// Specification of a question for multi-question or schema-driven evaluation.
 class QuestionSpec {
   /// The question primitive type: 'choice', 'noul', or 'score'.
