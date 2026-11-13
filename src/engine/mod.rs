@@ -16,7 +16,7 @@ use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::model::params::LlamaModelParams;
 use std::collections::HashMap;
 use std::num::NonZeroU32;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
@@ -59,6 +59,17 @@ pub struct EngineLoader {
     pub n_ctx: u32,
 }
 
+impl EngineLoader {
+    fn resolve_existing_file(model_id: &str) -> Result<PathBuf> {
+        let path = resolve_model_path(model_id)
+            .with_context(|| format!("Could not resolve model '{model_id}'"))?;
+        if !path.is_file() {
+            return Err(anyhow!("Model path '{}' is not a file", path.display()));
+        }
+        Ok(path)
+    }
+}
+
 impl ModelLoader for EngineLoader {
     type Model = DecisionEngine;
 
@@ -68,9 +79,12 @@ impl ModelLoader for EngineLoader {
             .unwrap_or_else(|| query.to_string())
     }
 
+    fn check(&self, model_id: &str) -> Result<()> {
+        Self::resolve_existing_file(model_id).map(|_| ())
+    }
+
     fn load(&self, model_id: &str) -> Result<DecisionEngine> {
-        let path = resolve_model_path(model_id)
-            .with_context(|| format!("Could not resolve model '{model_id}'"))?;
+        let path = Self::resolve_existing_file(model_id)?;
         let template = find_model_spec(model_id).map(|spec| spec.template);
         DecisionEngine::load(
             &path,
@@ -302,5 +316,32 @@ mod tests {
             .err()
             .expect("missing file fails");
         assert!(format!("{err:#}").contains("not found"), "{err:#}");
+    }
+
+    #[test]
+    fn engine_loader_check_validates_files_without_loading() {
+        struct TempFile(PathBuf);
+        impl Drop for TempFile {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+
+        let loader = EngineLoader {
+            n_gpu_layers: 0,
+            threads: 1,
+            n_ctx: 512,
+        };
+        assert!(loader.check("/nonexistent/model.gguf").is_err());
+
+        let dir = std::env::temp_dir();
+        assert!(loader.check(&dir.to_string_lossy()).is_err());
+
+        let temp_path = dir.join(format!("vej-check-test-{}.gguf", std::process::id()));
+        std::fs::write(&temp_path, b"not-a-real-gguf").expect("write temp file");
+        let _guard = TempFile(temp_path.clone());
+        loader
+            .check(&temp_path.to_string_lossy())
+            .expect("existing file passes check without loading GGUF");
     }
 }

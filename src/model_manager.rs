@@ -17,6 +17,9 @@ pub trait ModelLoader: Send + Sync + 'static {
     /// Map a user-supplied query (id, alias, or path) to the id models are tracked by.
     fn canonical_id(&self, query: &str) -> String;
 
+    /// Preflight check that `model_id` exists and can be loaded before evicting the current model.
+    fn check(&self, model_id: &str) -> Result<()>;
+
     fn load(&self, model_id: &str) -> Result<Self::Model>;
 }
 
@@ -225,6 +228,7 @@ impl<L: ModelLoader> ModelManager<L> {
         }
 
         let model_id = target.unwrap_or_else(|| self.default_model());
+        self.check_blocking(&model_id).await?;
         self.evict_and_drain().await;
         let model = self.load_blocking(&model_id).await?;
         Ok(self.install(model_id, model, keep_alive))
@@ -297,6 +301,14 @@ impl<L: ModelLoader> ModelManager<L> {
             let _drained = Arc::clone(&previous.drain_gate).write_owned().await;
             drop(previous);
         }
+    }
+
+    async fn check_blocking(&self, model_id: &str) -> Result<()> {
+        let loader = Arc::clone(&self.loader);
+        let id = model_id.to_string();
+        tokio::task::spawn_blocking(move || loader.check(&id))
+            .await
+            .context("model check task panicked")?
     }
 
     async fn load_blocking(&self, model_id: &str) -> Result<L::Model> {
@@ -657,6 +669,19 @@ mod tests {
 
         assert!(m.acquire(Some("model-b"), None).await.is_err());
 
+        assert_eq!(m.default_model(), "model-a");
+    }
+
+    #[tokio::test]
+    async fn failed_check_keeps_resident_model_loaded() {
+        let (loader, probe) = FakeLoader::new();
+        let m = manager_with(loader.with_failing_checks(["missing"]), secs(60));
+        drop(m.acquire(None, None).await.unwrap());
+
+        assert!(m.acquire(Some("missing"), None).await.is_err());
+
+        assert_eq!(probe.drops(), Vec::<String>::new());
+        assert_eq!(m.status().unwrap().model_id, "model-a");
         assert_eq!(m.default_model(), "model-a");
     }
 }
