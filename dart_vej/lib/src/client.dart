@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'exceptions.dart';
 import 'batch.dart';
+import 'json_reading.dart';
 import 'models.dart';
 
 /// Idiomatic client for vej (and hosted Jev) System 1 AI decision services.
@@ -79,75 +81,118 @@ class VejClient {
     return headers;
   }
 
-  /// Checks the daemon health and retrieves currently loaded model information.
-  Future<DaemonStatus> getStatus() async {
-    final uri = baseUrl.replace(path: '${baseUrl.path}/health');
+  Uri _uri(String path) => baseUrl.replace(path: '${baseUrl.path}$path');
+
+  /// `GET [path]`, parsed by [parse]. See [_send] for the error contract.
+  Future<T> _getJson<T>(
+    String path,
+    String failure,
+    T Function(Object? json) parse,
+  ) {
+    final uri = _uri(path);
+    return _send(
+      uri,
+      failure,
+      () => _httpClient.get(uri, headers: _buildHeaders()),
+      parse,
+    );
+  }
+
+  /// `POST [path]` with [payload] as JSON, parsed by [parse]. See [_send].
+  Future<T> _postJson<T>(
+    String path,
+    Object? payload,
+    String failure,
+    T Function(Object? json) parse,
+  ) {
+    final uri = _uri(path);
+    return _send(
+      uri,
+      failure,
+      () => _httpClient.post(
+        uri,
+        headers: _buildHeaders(),
+        body: jsonEncode(payload),
+      ),
+      parse,
+    );
+  }
+
+  /// Runs [request] and parses its JSON body.
+  ///
+  /// - Timeouts and network failures throw [VejConnectionException].
+  /// - Non-2xx responses throw [VejException] with the status code, prefixed by [failure].
+  /// - A body that isn't JSON, or has the wrong shape for [parse], throws
+  ///   [VejException] ("Invalid response…") rather than a connection error.
+  Future<T> _send<T>(
+    Uri uri,
+    String failure,
+    Future<http.Response> Function() request,
+    T Function(Object? json) parse,
+  ) async {
+    final http.Response response;
     try {
-      final response =
-          await _httpClient.get(uri, headers: _buildHeaders()).timeout(timeout);
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-        return DaemonStatus.fromJson(decoded);
-      }
-      throw VejException(
-        'Failed to get daemon health: ${response.body}',
-        statusCode: response.statusCode,
-      );
-    } catch (e) {
-      if (e is VejException) rethrow;
+      response = await request().timeout(timeout);
+    } on TimeoutException catch (e) {
       throw VejConnectionException(
-        'Could not connect to vej daemon at $uri: $e',
+        'Request to $uri timed out after ${timeout.inMilliseconds} ms',
+        details: e,
+      );
+    } on http.ClientException catch (e) {
+      throw VejConnectionException(
+        'Could not connect to vej at $uri: ${e.message}',
         details: e,
       );
     }
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw VejException(
+        '$failure: ${response.body}',
+        statusCode: response.statusCode,
+        details: response.body,
+      );
+    }
+    try {
+      return parse(jsonDecode(response.body));
+    } on FormatException catch (e) {
+      throw VejException(
+        'Invalid response from $uri: ${e.message}',
+        statusCode: response.statusCode,
+        details: response.body,
+      );
+    }
+  }
+
+  /// Checks the daemon health and retrieves currently loaded model information.
+  Future<DaemonStatus> getStatus() {
+    return _getJson(
+      '/health',
+      'Failed to get daemon health',
+      (json) => DaemonStatus.fromJson(asObject(json, 'health response')),
+    );
   }
 
   /// Lists all models configured in the vej catalog and their download status.
-  Future<List<ModelInfo>> listModels() async {
-    final uri = baseUrl.replace(path: '${baseUrl.path}/v1/models');
-    try {
-      final response =
-          await _httpClient.get(uri, headers: _buildHeaders()).timeout(timeout);
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        final decoded = jsonDecode(response.body) as List<dynamic>;
-        return decoded
-            .map((e) => ModelInfo.fromJson(e as Map<String, dynamic>))
-            .toList();
-      }
-      throw VejException(
-        'Failed to list models: ${response.body}',
-        statusCode: response.statusCode,
-      );
-    } catch (e) {
-      if (e is VejException) rethrow;
-      throw VejConnectionException('Failed to list models: $e', details: e);
-    }
+  Future<List<ModelInfo>> listModels() {
+    return _getJson(
+      '/v1/models',
+      'Failed to list models',
+      (json) => asList(json, 'model list')
+          .map((e) => ModelInfo.fromJson(asObject(e, 'model entry')))
+          .toList(),
+    );
   }
 
   /// Hot-switches the active model in the daemon without restarting the server.
-  Future<String> switchModel(String modelId) async {
-    final uri = baseUrl.replace(path: '${baseUrl.path}/v1/models/switch');
-    try {
-      final response = await _httpClient
-          .post(
-            uri,
-            headers: _buildHeaders(),
-            body: jsonEncode({'model': modelId}),
-          )
-          .timeout(timeout);
-
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-        return decoded['switched_to']?.toString() ?? modelId;
-      }
-      throw VejException(
-        'Failed to switch model to $modelId: ${response.body}',
-        statusCode: response.statusCode,
-      );
-    } catch (e) {
-      if (e is VejException) rethrow;
-      throw VejConnectionException('Error switching model: $e', details: e);
-    }
+  Future<String> switchModel(String modelId) {
+    return _postJson(
+      '/v1/models/switch',
+      {'model': modelId},
+      'Failed to switch model to $modelId',
+      (json) =>
+          asObject(json, 'switch response')['switched_to']?.toString() ??
+          modelId,
+    );
   }
 
   /// Evaluates a single-prompt categorical decision (Flat choices format).
@@ -175,12 +220,11 @@ class VejClient {
       temperature: temperature,
     );
 
-    final res = await evaluate(req);
-    if (res is DecisionResult) {
-      return res;
-    }
-    throw const VejException(
-        'Expected flat DecisionResult, received JevResult.');
+    return switch (await evaluate(req)) {
+      DecisionResult res => res,
+      JevResult() => throw const VejException(
+          'Expected flat DecisionResult, received JevResult.'),
+    };
   }
 
   /// Evaluates a boolean 'noul' question (Yes / No probability).
@@ -258,50 +302,32 @@ class VejClient {
       temperature: temperature,
     );
 
-    final res = await evaluate(req);
-    if (res is JevResult) {
-      return res;
-    }
-    throw const VejException(
-        'Expected JevResult, received flat DecisionResult.');
+    return switch (await evaluate(req)) {
+      JevResult res => res,
+      DecisionResult() => throw const VejException(
+          'Expected JevResult, received flat DecisionResult.'),
+    };
   }
 
-  /// Generic evaluation endpoint supporting either flat [DecisionResult] or multi-question [JevResult].
-  Future<dynamic> evaluate(DecisionRequest request) async {
-    final uri = baseUrl.replace(path: '${baseUrl.path}/v1/systemone');
+  /// Generic evaluation endpoint: a flat [DecisionResult] for `choices` requests or a
+  /// multi-question [JevResult] for `questions` requests.
+  Future<EvaluationResult> evaluate(DecisionRequest request) {
+    return _postJson(
+      '/v1/systemone',
+      request.toJson(),
+      'Server returned error',
+      _parseEvaluation,
+    );
+  }
 
-    try {
-      final response = await _httpClient
-          .post(
-            uri,
-            headers: _buildHeaders(),
-            body: jsonEncode(request.toJson()),
-          )
-          .timeout(timeout);
-
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-
-        // Differentiate between JevResponse (has 'answers') and flat DecisionResponse (has 'decision')
-        if (decoded.containsKey('answers')) {
-          return JevResult.fromJson(decoded);
-        } else if (decoded.containsKey('decision')) {
-          return DecisionResult.fromJson(decoded);
-        }
-        throw VejException('Unrecognized response format: ${response.body}');
-      }
-
-      throw VejException(
-        'Server returned error: ${response.body}',
-        statusCode: response.statusCode,
-      );
-    } catch (e) {
-      if (e is VejException) rethrow;
-      throw VejConnectionException(
-        'Connection error during decision evaluation: $e',
-        details: e,
-      );
-    }
+  static EvaluationResult _parseEvaluation(Object? json) {
+    final decoded = asObject(json, 'evaluation response');
+    // A Jev response has 'answers'; a flat decision has 'decision'.
+    if (decoded.containsKey('answers')) return JevResult.fromJson(decoded);
+    if (decoded.containsKey('decision'))
+      return DecisionResult.fromJson(decoded);
+    throw const FormatException(
+        "expected an evaluation result with 'answers' or 'decision'");
   }
 
   /// Evaluates the same [questions] for every item in one HTTP call.
@@ -333,31 +359,12 @@ class VejClient {
   }
 
   /// Sends a batch request to `/v1/systemone/batch`.
-  Future<BatchDecisionResult> evaluateBatch(
-      BatchDecisionRequest request) async {
-    final uri = baseUrl.replace(path: '${baseUrl.path}/v1/systemone/batch');
-    try {
-      final response = await _httpClient
-          .post(
-            uri,
-            headers: _buildHeaders(),
-            body: jsonEncode(request.toJson()),
-          )
-          .timeout(timeout);
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-        return BatchDecisionResult.fromJson(decoded);
-      }
-      throw VejException(
-        'Server returned error: ${response.body}',
-        statusCode: response.statusCode,
-      );
-    } catch (e) {
-      if (e is VejException) rethrow;
-      throw VejConnectionException(
-        'Connection error during batch decision evaluation: $e',
-        details: e,
-      );
-    }
+  Future<BatchDecisionResult> evaluateBatch(BatchDecisionRequest request) {
+    return _postJson(
+      '/v1/systemone/batch',
+      request.toJson(),
+      'Server returned error',
+      (json) => BatchDecisionResult.fromJson(asObject(json, 'batch response')),
+    );
   }
 }

@@ -1,4 +1,9 @@
 /// Enumeration of prompt template styles matching vej's native engine.
+///
+/// Deprecated: the vej server builds prompts itself, and this copy of its templates
+/// drifts from the server's (which now neutralizes special tokens and picks labels per
+/// tokenizer). Send requests with [VejClient] instead.
+@Deprecated('Prompts are built by the vej server; removed in 0.4.0')
 enum TemplateStyle {
   llama3,
   chatml,
@@ -7,6 +12,9 @@ enum TemplateStyle {
 }
 
 /// Helper for constructing identical assistant turn primed prompts.
+///
+/// Deprecated: see [TemplateStyle].
+@Deprecated('Prompts are built by the vej server; removed in 0.4.0')
 class PromptBuilder {
   static const List<String> letters = [
     'A',

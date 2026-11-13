@@ -1,3 +1,5 @@
+// PromptBuilder is deprecated but still shipped until 0.4.0, so its tests stay.
+// ignore_for_file: deprecated_member_use_from_same_package
 import 'dart:convert';
 import 'package:test/test.dart';
 import 'package:http/http.dart' as http;

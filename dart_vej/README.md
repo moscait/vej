@@ -183,6 +183,29 @@ final client = VejClient.hosted(
 );
 ```
 
+### 8. Results and Errors
+
+`evaluate()` returns a sealed `EvaluationResult`, so a `switch` over it is exhaustive:
+
+```dart
+final result = await client.evaluate(request);
+switch (result) {
+  case DecisionResult(:final decision):
+    print('decided: $decision');
+  case JevResult(:final answers):
+    print('answered: ${answers.keys}');
+}
+```
+
+Every failure is a `VejException`:
+
+- `VejConnectionException`: the server couldn't be reached, or the request timed out.
+- `VejException` with `statusCode`: the server answered with an error (e.g. 400 for an
+  invalid request).
+- `VejException('Invalid response…')`: the server answered 2xx, but the body wasn't the
+  expected JSON.
+- `VejValidationException`: the request was rejected before it was sent.
+
 ---
 
 ## 🛠️ Architectural Notes & Platform Support
