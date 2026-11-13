@@ -8,6 +8,7 @@ use llama_cpp_2::token::LlamaToken;
 use std::num::NonZeroU32;
 
 use super::DecisionEngine;
+use super::limits;
 use super::prompt::add_bos_for;
 
 impl DecisionEngine {
@@ -40,8 +41,13 @@ impl DecisionEngine {
             return Err(anyhow!("Generation prompt tokenized to zero tokens"));
         }
 
+        let ctx_cap = limits::generation_context_cap(self.n_ctx, self.model.n_ctx_train()) as usize;
+        limits::check_prompt_tokens(prompt_tokens.len(), ctx_cap.saturating_sub(1))?;
+
         let max_gen = max_tokens.clamp(64, 2048);
-        let ctx_size = (prompt_tokens.len() + max_gen + 64).max(self.n_ctx as usize);
+        let ctx_size = (prompt_tokens.len() + max_gen + 64)
+            .max(self.n_ctx as usize)
+            .min(ctx_cap);
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(NonZeroU32::new(ctx_size as u32))
             .with_n_batch(ctx_size as u32)
@@ -78,6 +84,9 @@ impl DecisionEngine {
             }
             if let Some(bytes) = self.token_piece_bytes(next_token) {
                 output_bytes.extend_from_slice(&bytes);
+            }
+            if cur_pos >= ctx_size as i32 {
+                break;
             }
             batch.clear();
             batch

@@ -2,6 +2,7 @@
 
 use serde_json::Value;
 
+use super::limits::{MAX_SCORE_LEVELS, validate_choice_count};
 use super::types::{ChoiceItem, InvalidRequest, QuestionSpec};
 
 /// Parses a `QuestionSpec`'s criteria into concrete candidate choices.
@@ -17,17 +18,22 @@ pub fn build_choices(spec: &QuestionSpec) -> Result<Vec<ChoiceItem>, InvalidRequ
         .or(spec.levels.as_ref());
 
     if let Some(crit) = effective_crit {
-        append_criteria_choices(crit, is_score, &mut choice_items);
+        append_criteria_choices(crit, is_score, &mut choice_items)?;
     }
 
     if choice_items.is_empty() {
         apply_default_choices(spec, is_score, &mut choice_items)?;
     }
 
+    validate_choice_count(&choice_items, is_score)?;
     Ok(choice_items)
 }
 
-fn append_criteria_choices(crit: &Value, is_score: bool, choice_items: &mut Vec<ChoiceItem>) {
+fn append_criteria_choices(
+    crit: &Value,
+    is_score: bool,
+    choice_items: &mut Vec<ChoiceItem>,
+) -> Result<(), InvalidRequest> {
     match crit {
         Value::Object(map) => {
             for (k, v) in map {
@@ -61,8 +67,17 @@ fn append_criteria_choices(crit: &Value, is_score: bool, choice_items: &mut Vec<
             }
         }
         Value::Number(num) if is_score => {
-            let n = num.as_u64().unwrap_or(6) as usize;
-            for lvl in 0..n {
+            let Some(n) = num.as_u64() else {
+                return Err(InvalidRequest(format!(
+                    "score levels must be an integer between 1 and {MAX_SCORE_LEVELS}"
+                )));
+            };
+            if n == 0 || n > MAX_SCORE_LEVELS as u64 {
+                return Err(InvalidRequest(format!(
+                    "score levels must be between 1 and {MAX_SCORE_LEVELS} (got {n})"
+                )));
+            }
+            for lvl in 0..(n as usize) {
                 choice_items.push(ChoiceItem {
                     key: lvl.to_string(),
                     display: format!("Level {}", lvl),
@@ -71,6 +86,7 @@ fn append_criteria_choices(crit: &Value, is_score: bool, choice_items: &mut Vec<
         }
         _ => {}
     }
+    Ok(())
 }
 
 fn apply_default_choices(
@@ -238,11 +254,38 @@ mod tests {
                 spec: json!({ "type": "choice", "levels": 3 }),
                 expected: Err("must define criteria"),
             },
+            Case {
+                name: "score with 101 levels (0..=100) succeeds",
+                spec: json!({ "type": "score", "levels": 101 }),
+                expected: Ok(vec![]), // checked separately below
+            },
+            Case {
+                name: "score with absurd or oversized numeric levels is rejected",
+                spec: json!({ "type": "score", "levels": 1_000_000_000_000_000_000_u64 }),
+                expected: Err("between 1 and 101"),
+            },
+            Case {
+                name: "score with 102 numeric levels is rejected",
+                spec: json!({ "type": "score", "levels": 102 }),
+                expected: Err("between 1 and 101"),
+            },
+            Case {
+                name: "score with zero levels is rejected",
+                spec: json!({ "type": "score", "levels": 0 }),
+                expected: Err("between 1 and 101"),
+            },
         ];
 
         for case in cases {
             let spec: QuestionSpec = serde_json::from_value(case.spec).expect("valid QuestionSpec");
             let actual = build_choices(&spec);
+            if case.name == "score with 101 levels (0..=100) succeeds" {
+                let items = actual.expect("101 levels valid");
+                assert_eq!(items.len(), 101);
+                assert_eq!(items.first().unwrap().key, "0");
+                assert_eq!(items.last().unwrap().key, "100");
+                continue;
+            }
             match case.expected {
                 Ok(expected_pairs) => {
                     let items =

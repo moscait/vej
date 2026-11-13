@@ -186,6 +186,7 @@ where
     L: ModelLoader,
     L::Model: DecisionModel,
 {
+    req.validate().map_err(|e| (StatusCode::BAD_REQUEST, e.0))?;
     let requested = policy.requested_model(req.model.as_deref());
     let keep_alive = policy.keep_alive(req.keep_alive);
     run_inference(
@@ -209,6 +210,7 @@ where
     L: ModelLoader,
     L::Model: DecisionModel,
 {
+    req.validate().map_err(|e| (StatusCode::BAD_REQUEST, e.0))?;
     let requested = policy.requested_model(req.model.as_deref());
     let keep_alive = policy.keep_alive(req.keep_alive);
     run_inference(

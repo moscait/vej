@@ -300,7 +300,7 @@ async fn evaluation_errors_return_an_error_status() {
         json!({ "state": "x", "choices": [] }),
     )
     .await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -577,6 +577,105 @@ async fn access_guard_rejects_cross_site_and_rebinding_requests() {
     .await;
     assert_eq!(status, StatusCode::OK, "same-origin playground request");
     assert!(probe.events().is_empty());
+}
+
+#[tokio::test]
+async fn validation_rejects_oversized_or_malformed_requests_without_loading_model() {
+    let (app, probe) = app();
+
+    let too_many_choices: Vec<String> = (0..27).map(|i| format!("c{i}")).collect();
+    let (status, _) = post_json(
+        &app,
+        "/v1/systemone",
+        json!({ "state": "x", "choices": too_many_choices }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "27 choices");
+
+    let (status, _) = post_json(
+        &app,
+        "/v1/systemone",
+        json!({
+            "state": "x",
+            "questions": { "rating": { "type": "score", "levels": 102 } }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "102 levels");
+
+    let mut too_many_questions = serde_json::Map::new();
+    for i in 0..33 {
+        too_many_questions.insert(format!("q{i}"), json!({ "type": "noul" }));
+    }
+    let (status, _) = post_json(
+        &app,
+        "/v1/systemone",
+        json!({ "state": "x", "questions": too_many_questions }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "33 questions");
+
+    let too_many_items: Vec<Value> = (0..257)
+        .map(|i| json!({ "id": format!("item-{i}"), "state": "s" }))
+        .collect();
+    let (status, _) = post_json(
+        &app,
+        "/v1/batch",
+        json!({ "choices": ["a", "b"], "items": too_many_items }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "257 batch items");
+
+    let mut q32 = serde_json::Map::new();
+    for i in 0..32 {
+        q32.insert(format!("q{i}"), json!({ "type": "noul" }));
+    }
+    let items_33: Vec<Value> = (0..33)
+        .map(|i| json!({ "id": format!("item-{i}"), "state": "s" }))
+        .collect();
+    let (status, _) = post_json(
+        &app,
+        "/v1/batch",
+        json!({ "questions": q32, "items": items_33 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "33 * 32 = 1056 > 1024");
+
+    let huge_state = "x".repeat(crate::engine::MAX_REQUEST_BODY_BYTES + 128);
+    let oversized_body = serde_json::to_vec(&json!({
+        "state": huge_state,
+        "choices": ["a", "b"],
+    }))
+    .unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/systemone")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(oversized_body))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::PAYLOAD_TOO_LARGE,
+        ">2 MiB request body must be rejected before loading"
+    );
+
+    assert!(
+        probe.loads().is_empty(),
+        "invalid shapes must be rejected before loading a model, got: {:?}",
+        probe.loads()
+    );
+
+    let max_choices: Vec<String> = (0..26)
+        .map(|i| char::from(b'A' + i as u8).to_string())
+        .collect();
+    let (status, _) = post_json(
+        &app,
+        "/v1/systemone",
+        json!({ "state": "x", "choices": max_choices }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "26 choices A..Z must succeed");
 }
 
 #[tokio::test]

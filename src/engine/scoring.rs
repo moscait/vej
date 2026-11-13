@@ -3,11 +3,8 @@
 use llama_cpp_2::model::{AddBos, LlamaModel};
 use std::collections::HashMap;
 
+use super::limits::LETTER_LABELS;
 use super::types::{AnswerOutput, ChoiceItem};
-
-const LETTERS: [&str; 16] = [
-    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P",
-];
 
 pub(crate) fn score_choices_from_logits(
     model: &LlamaModel,
@@ -41,7 +38,7 @@ pub(crate) fn score_choices_from_logits(
             let k = item.key.trim();
             variants.push(format!(" {k}"));
             variants.push(k.to_string());
-        } else if let Some(&letter) = LETTERS.get(idx) {
+        } else if let Some(&letter) = LETTER_LABELS.get(idx) {
             variants.push(format!(" {letter}"));
             variants.push(letter.to_string());
             variants.push(format!(" {}", letter.to_lowercase()));

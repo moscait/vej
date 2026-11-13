@@ -4,11 +4,8 @@ use llama_cpp_2::model::AddBos;
 
 use crate::models::{TemplateStyle, find_model_spec};
 
+use super::limits::LETTER_LABELS;
 use super::types::ChoiceItem;
-
-const LETTERS: [&str; 16] = [
-    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P",
-];
 
 pub(crate) fn resolve_template(
     model_id: &str,
@@ -78,13 +75,13 @@ pub(crate) fn format_decision_prompt(
     } else {
         let mut opts = String::new();
         for (idx, item) in choices.iter().enumerate() {
-            let letter = LETTERS.get(idx).copied().unwrap_or("?");
+            let letter = LETTER_LABELS.get(idx).copied().unwrap_or("?");
             opts.push_str(&format!("\n{letter}) {}", item.display));
         }
         let letter_list = choices
             .iter()
             .enumerate()
-            .map(|(idx, _)| LETTERS.get(idx).copied().unwrap_or("?"))
+            .map(|(idx, _)| LETTER_LABELS.get(idx).copied().unwrap_or("?"))
             .collect::<Vec<_>>()
             .join(", ");
         (
@@ -135,5 +132,24 @@ pub(crate) fn format_generation_prompt(template: TemplateStyle, prompt: &str) ->
             "<|turn>system\n{}<turn|>\n<|turn>user\n{}<turn|>\n<|turn>model\n<|thought|>\n<thought|>\n",
             system_msg, prompt
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_decision_prompt_uses_letters_a_through_z() {
+        let choices: Vec<ChoiceItem> = (0..26)
+            .map(|i| ChoiceItem {
+                key: format!("opt_{i}"),
+                display: format!("Option {i}"),
+            })
+            .collect();
+        let prompt = format_decision_prompt(TemplateStyle::Llama3, None, "state", &choices);
+        assert!(prompt.contains("\nZ) Option 25"), "{prompt}");
+        assert!(prompt.contains(", Z]"), "{prompt}");
+        assert!(!prompt.contains("?)"), "{prompt}");
     }
 }

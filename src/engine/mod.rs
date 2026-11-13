@@ -3,6 +3,7 @@
 mod choices;
 mod evaluate;
 mod generate;
+mod limits;
 mod prompt;
 mod scoring;
 mod types;
@@ -23,6 +24,7 @@ use crate::model_manager::ModelLoader;
 use crate::models::{TemplateStyle, find_model_spec, resolve_model_path};
 use types::ChoiceItem;
 
+pub use limits::MAX_REQUEST_BODY_BYTES;
 pub use types::{BatchDecisionRequest, BatchDecisionResponse, DecisionRequest, UnifiedResponse};
 #[cfg(test)]
 pub use types::{BatchItemResult, DecisionResponse};
@@ -154,7 +156,8 @@ impl DecisionEngine {
         min_size: u32,
         n_sequences: u32,
     ) -> Result<LlamaContext<'_>> {
-        let ctx_size = self.n_ctx.max(min_size).max(2048);
+        let train_ctx = self.model.n_ctx_train();
+        let ctx_size = self.n_ctx.max(min_size).max(2048).min(train_ctx).max(1);
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(NonZeroU32::new(ctx_size))
             .with_n_batch(ctx_size)
@@ -165,6 +168,26 @@ impl DecisionEngine {
         self.model
             .new_context(self.backend, ctx_params)
             .map_err(|e| anyhow!("Failed to create inference context: {:?}", e))
+    }
+
+    pub(crate) fn create_batch_context(
+        &self,
+        max_chunk_tokens: usize,
+        budget: usize,
+        n_sequences: u32,
+    ) -> Result<LlamaContext<'_>> {
+        let desired = (max_chunk_tokens.saturating_add(256)).min(budget).max(1) as u32;
+        let ctx_size = self.n_ctx.max(desired).min(budget.max(1) as u32).max(1);
+        let ctx_params = LlamaContextParams::default()
+            .with_n_ctx(NonZeroU32::new(ctx_size))
+            .with_n_batch(ctx_size)
+            .with_n_seq_max(n_sequences.max(64))
+            .with_kv_unified(true)
+            .with_n_threads(self.threads as i32);
+
+        self.model
+            .new_context(self.backend, ctx_params)
+            .map_err(|e| anyhow!("Failed to create batch inference context: {:?}", e))
     }
 
     pub fn create_context(&self) -> Result<LlamaContext<'_>> {
