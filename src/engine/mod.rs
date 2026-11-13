@@ -35,7 +35,12 @@ pub use types::{BatchItemResult, DecisionResponse};
 pub trait DecisionModel: Send + Sync + 'static {
     fn evaluate_unified(&self, req: &DecisionRequest) -> Result<UnifiedResponse>;
     fn evaluate_batch(&self, req: &BatchDecisionRequest) -> Result<BatchDecisionResponse>;
-    fn generate_text(&self, prompt: &str, max_tokens: usize) -> Result<String>;
+    fn generate_text(
+        &self,
+        prompt: &str,
+        system: Option<&str>,
+        max_tokens: usize,
+    ) -> Result<String>;
 }
 
 /// llama.cpp allows exactly one live backend per process, so it is initialized once and
@@ -88,8 +93,13 @@ impl DecisionModel for DecisionEngine {
         DecisionEngine::evaluate_batch(self, req)
     }
 
-    fn generate_text(&self, prompt: &str, max_tokens: usize) -> Result<String> {
-        DecisionEngine::generate_text(self, prompt, max_tokens)
+    fn generate_text(
+        &self,
+        prompt: &str,
+        system: Option<&str>,
+        max_tokens: usize,
+    ) -> Result<String> {
+        DecisionEngine::generate_text(self, prompt, system, max_tokens)
     }
 }
 
@@ -174,8 +184,8 @@ impl DecisionEngine {
         prompt::format_decision_prompt(self.template, instruction, state_str, choices, scheme)
     }
 
-    pub fn format_generation_prompt(&self, prompt_str: &str) -> String {
-        prompt::format_generation_prompt(self.template, prompt_str)
+    pub fn format_generation_prompt(&self, system: Option<&str>, prompt_str: &str) -> String {
+        prompt::format_generation_prompt(self.template, system, prompt_str)
     }
 
     pub fn create_context_with_size(

@@ -581,6 +581,24 @@ async fn generate_endpoints_return_text_from_the_serving_model() {
         assert_eq!(body["response"], "echo: Summarize John 3:16");
         assert_eq!(body["done"], true);
         assert_eq!(probe.loads(), ["model-a"]);
+
+        let (sys_status, sys_body) = post_json(
+            &app,
+            path,
+            json!({
+                "prompt": "Summarize John 3:16",
+                "system": "You are a concise Bible assistant.",
+                "model": "gemma-4-e2b"
+            }),
+        )
+        .await;
+        assert_eq!(sys_status, StatusCode::OK, "{path}: {sys_body}");
+        assert_eq!(sys_body["model"], "gemma-4-e2b");
+        assert_eq!(
+            sys_body["response"],
+            "echo [You are a concise Bible assistant.]: Summarize John 3:16"
+        );
+        assert_eq!(probe.loads(), ["model-a", "gemma-4-e2b"]);
     }
 }
 

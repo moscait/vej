@@ -129,9 +129,17 @@ impl DecisionModel for FakeModel {
         })
     }
 
-    fn generate_text(&self, prompt: &str, _max_tokens: usize) -> Result<String> {
+    fn generate_text(
+        &self,
+        prompt: &str,
+        system: Option<&str>,
+        _max_tokens: usize,
+    ) -> Result<String> {
         match &self.eval_outcome {
-            FakeEvalOutcome::Ok => Ok(format!("echo: {prompt}")),
+            FakeEvalOutcome::Ok => match system.map(str::trim).filter(|s| !s.is_empty()) {
+                Some(sys) => Ok(format!("echo [{sys}]: {prompt}")),
+                None => Ok(format!("echo: {prompt}")),
+            },
             FakeEvalOutcome::Invalid(msg) => {
                 Err(anyhow!(crate::engine::InvalidRequest(msg.clone())))
             }

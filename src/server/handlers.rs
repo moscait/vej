@@ -42,7 +42,11 @@ pub(super) struct SwitchModelRequest {
 #[derive(Deserialize)]
 pub(super) struct GenerateRequest {
     #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
     prompt: String,
+    #[serde(default)]
+    system: Option<String>,
     #[serde(default)]
     max_tokens: Option<usize>,
     #[serde(default)]
@@ -256,16 +260,20 @@ where
         return Ok(Json(serde_json::json!({ "response": "", "done": true })));
     }
 
+    let requested = policy.requested_model(req.model.as_deref());
     let max_tokens = req.max_tokens.unwrap_or(DEFAULT_MAX_GENERATED_TOKENS);
     let prompt = req.prompt;
+    let system = req.system;
     let (model, text) = run_inference(
         &state,
         policy,
-        None,
+        requested,
         keep_alive,
         "Generation error",
         move |lease| {
-            let text = lease.model().generate_text(&prompt, max_tokens)?;
+            let text = lease
+                .model()
+                .generate_text(&prompt, system.as_deref(), max_tokens)?;
             Ok((lease.model_id().to_string(), text))
         },
     )

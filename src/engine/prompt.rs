@@ -209,8 +209,17 @@ pub(crate) fn format_decision_prompt(
     }
 }
 
-pub(crate) fn format_generation_prompt(template: TemplateStyle, prompt: &str) -> String {
-    let system_msg = "You are a helpful, accurate Bible study assistant. When asked for JSON, respond with valid JSON only.";
+pub const DEFAULT_GENERATE_SYSTEM_PROMPT: &str = "You are a precise, concise assistant. Follow the user's instructions exactly. When asked for JSON, respond with valid JSON only, with no surrounding text or markdown.";
+
+pub(crate) fn format_generation_prompt(
+    template: TemplateStyle,
+    system: Option<&str>,
+    prompt: &str,
+) -> String {
+    let system_msg = system
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(DEFAULT_GENERATE_SYSTEM_PROMPT);
     match template {
         TemplateStyle::Llama3 => format!(
             "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n{}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
@@ -357,5 +366,37 @@ mod tests {
         );
         assert!(sanitized.contains("▁\u{200B}<special>"), "{sanitized:?}");
         assert!(sanitized.contains("system"), "{sanitized:?}");
+    }
+
+    #[test]
+    fn format_generation_prompt_handles_all_templates_default_and_custom_system() {
+        let templates = [
+            TemplateStyle::Llama3,
+            TemplateStyle::ChatML,
+            TemplateStyle::Gemma,
+            TemplateStyle::Gemma4,
+        ];
+        for template in templates {
+            let default_p = format_generation_prompt(template, None, "hello");
+            assert!(
+                default_p.contains(DEFAULT_GENERATE_SYSTEM_PROMPT),
+                "{template:?}: {default_p}"
+            );
+            assert!(default_p.contains("hello"), "{template:?}: {default_p}");
+
+            let blank_p = format_generation_prompt(template, Some("   \n\t "), "hello");
+            assert_eq!(
+                blank_p, default_p,
+                "blank system should use default for {template:?}"
+            );
+
+            let custom = "You are a custom Bible study assistant.";
+            let custom_p = format_generation_prompt(template, Some(custom), "hello");
+            assert!(custom_p.contains(custom), "{template:?}: {custom_p}");
+            assert!(
+                !custom_p.contains(DEFAULT_GENERATE_SYSTEM_PROMPT),
+                "{template:?}: {custom_p}"
+            );
+        }
     }
 }
