@@ -109,7 +109,7 @@ pub struct InstallArgs {
 
 #[derive(Args, Debug)]
 pub struct ServeArgs {
-    /// Model to load (e.g. llama-3.2-1b, smollm2-1.7b, gemma-2-2b, or custom .gguf path)
+    /// Model to load (e.g. llama-3.2-1b, smollm2-1.7b, gemma-4-e2b, or custom .gguf path)
     #[arg(short, long)]
     pub model: Option<String>,
 
@@ -306,7 +306,7 @@ pub enum ModelsCommands {
 
     /// Download a model preset from Hugging Face into the local cache
     Pull {
-        /// Model name or alias (e.g. llama-3.2-1b, smollm2-1.7b, gemma-2-2b)
+        /// Model name or alias (e.g. llama-3.2-1b, smollm2-1.7b, gemma-4-e2b)
         model: String,
     },
 }
@@ -379,7 +379,7 @@ mod tests {
             "1",
             "--no-preload",
             "-m",
-            "gemma-2-2b",
+            "llama-3.2-3b",
         ]);
         let settings = args.resolve(&config());
         assert_eq!(settings.host, "127.0.0.1");
@@ -387,7 +387,7 @@ mod tests {
         assert_eq!(settings.keep_alive, KeepAlive::Forever);
         assert_eq!(settings.max_concurrent, 1);
         assert!(!settings.preload);
-        assert_eq!(settings.model, "gemma-2-2b");
+        assert_eq!(settings.model, "llama-3.2-3b");
     }
 
     #[test]
