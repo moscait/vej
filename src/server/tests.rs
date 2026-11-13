@@ -324,6 +324,23 @@ async fn limits_concurrent_evaluations() {
     assert_eq!(probe.max_concurrent_evaluations(), 1);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancelled_request_keeps_inference_slot_until_completion() {
+    let (loader, probe) = FakeLoader::new();
+    let app = app_with(loader.with_eval_delay(Duration::from_millis(300)), 1);
+
+    let timed_out = tokio::time::timeout(
+        Duration::from_millis(50),
+        post_json(&app, "/v1/systemone", decision(json!({}))),
+    )
+    .await;
+    assert!(timed_out.is_err(), "request A should time out");
+
+    let (status, _) = post_json(&app, "/v1/systemone", decision(json!({}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(probe.max_concurrent_evaluations(), 1);
+}
+
 #[tokio::test]
 async fn models_list_marks_the_serving_model_active() {
     let (app, _probe) = app();

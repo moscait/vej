@@ -71,7 +71,8 @@ pub(super) struct RunningModels {
     models: Vec<RunningModel>,
 }
 
-/// The lease is released inside the blocking task, so keep_alive = 0 unloads there.
+/// The slot and lease are released inside the blocking task, so client disconnects keep the
+/// permit held until inference finishes and `keep_alive = 0` unloads there.
 async fn run_inference<L, T, F>(
     state: &AppState<L>,
     policy: ClientPolicy,
@@ -86,7 +87,7 @@ where
     F: FnOnce(&ModelLease<L::Model>) -> anyhow::Result<T> + Send + 'static,
 {
     let internal = |msg: String| (StatusCode::INTERNAL_SERVER_ERROR, msg);
-    let _slot = Arc::clone(&state.inference_slots)
+    let slot = Arc::clone(&state.inference_slots)
         .acquire_owned()
         .await
         .map_err(|_| {
@@ -100,10 +101,14 @@ where
         .acquire(requested, keep_alive)
         .await
         .map_err(|e| model_unavailable(policy, &e))?;
-    tokio::task::spawn_blocking(move || work(&lease))
-        .await
-        .map_err(|e| internal(format!("{error_label}: task failed: {e}")))?
-        .map_err(|e| internal(format!("{error_label}: {e}")))
+    tokio::task::spawn_blocking(move || {
+        let _slot = slot;
+        let lease = lease;
+        work(&lease)
+    })
+    .await
+    .map_err(|e| internal(format!("{error_label}: task failed: {e}")))?
+    .map_err(|e| internal(format!("{error_label}: {e}")))
 }
 
 /// Load errors name model files and paths, which remote clients must not see.
