@@ -26,10 +26,9 @@ use types::ChoiceItem;
 
 pub use limits::MAX_REQUEST_BODY_BYTES;
 pub use types::{
-    BatchDecisionRequest, BatchDecisionResponse, DecisionRequest, InvalidRequest, UnifiedResponse,
+    BatchDecisionRequest, BatchDecisionResponse, BatchItem, BatchItemResult, DecisionRequest,
+    DecisionResponse, InvalidRequest, JevResponse, UnifiedResponse,
 };
-#[cfg(test)]
-pub use types::{BatchItemResult, DecisionResponse};
 
 /// A loaded model that can answer decision and generation requests.
 pub trait DecisionModel: Send + Sync + 'static {
@@ -155,6 +154,28 @@ impl DecisionEngine {
 
     pub fn neutralize_user_text(&self, text: &str) -> String {
         self.special_guard.neutralize(text)
+    }
+
+    /// Returns true if `text` tokenizes (with `AddBos::Never`) into any control or
+    /// user-defined special token.
+    pub fn contains_special_tokens(&self, text: &str) -> Result<bool> {
+        let tokens = self
+            .model
+            .str_to_token(text, llama_cpp_2::model::AddBos::Never)
+            .map_err(|e| anyhow!("Failed to tokenize probe text: {e:?}"))?;
+        Ok(tokens.into_iter().any(|tok| {
+            self.model.token_attr(tok).intersects(
+                llama_cpp_2::token_type::LlamaTokenAttr::Control
+                    | llama_cpp_2::token_type::LlamaTokenAttr::UserDefined,
+            )
+        }))
+    }
+
+    /// Returns a control or user-defined special token from the loaded model's vocabulary, if any.
+    pub fn sample_special_token(&self) -> Option<String> {
+        prompt::collect_special_tokens(&self.model)
+            .into_iter()
+            .find(|tok| self.contains_special_tokens(tok).unwrap_or(false))
     }
 
     pub(crate) fn neutralize_choices(&self, choices: &[ChoiceItem]) -> Vec<ChoiceItem> {
