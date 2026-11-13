@@ -1,7 +1,7 @@
 //! Test doubles for the model lifecycle and HTTP layers, so tests run without GGUF files.
 
 use anyhow::{Result, anyhow};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -18,6 +18,8 @@ pub struct Probe {
     events: Arc<Mutex<Vec<String>>>,
     active: Arc<AtomicUsize>,
     max_active: Arc<AtomicUsize>,
+    active_loads: Arc<AtomicUsize>,
+    max_active_loads: Arc<AtomicUsize>,
 }
 
 impl Probe {
@@ -40,6 +42,10 @@ impl Probe {
 
     pub fn max_concurrent_evaluations(&self) -> usize {
         self.max_active.load(Ordering::SeqCst)
+    }
+
+    pub fn max_concurrent_loads(&self) -> usize {
+        self.max_active_loads.load(Ordering::SeqCst)
     }
 
     fn filtered(&self, prefix: &str) -> Vec<String> {
@@ -154,6 +160,7 @@ pub struct FakeLoader {
     load_delay: Duration,
     eval_delay: Duration,
     failures_remaining: AtomicUsize,
+    failing_checks: HashSet<String>,
     eval_outcome: FakeEvalOutcome,
 }
 
@@ -179,6 +186,16 @@ impl FakeLoader {
         self
     }
 
+    pub fn with_failing_checks<I, S>(mut self, model_ids: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.failing_checks
+            .extend(model_ids.into_iter().map(Into::into));
+        self
+    }
+
     pub fn with_eval_invalid_request(mut self, msg: impl Into<String>) -> Self {
         self.eval_outcome = FakeEvalOutcome::Invalid(msg.into());
         self
@@ -200,7 +217,27 @@ impl ModelLoader for FakeLoader {
         }
     }
 
+    fn check(&self, model_id: &str) -> Result<()> {
+        if self.failing_checks.contains(model_id) {
+            return Err(anyhow!("model '{model_id}' failed preflight check"));
+        }
+        Ok(())
+    }
+
     fn load(&self, model_id: &str) -> Result<FakeModel> {
+        struct ActiveLoad<'a>(&'a AtomicUsize);
+        impl Drop for ActiveLoad<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+
+        self.check(model_id)?;
+        let now_active = self.probe.active_loads.fetch_add(1, Ordering::SeqCst) + 1;
+        self.probe
+            .max_active_loads
+            .fetch_max(now_active, Ordering::SeqCst);
+        let _active = ActiveLoad(&self.probe.active_loads);
         std::thread::sleep(self.load_delay);
         let should_fail = self
             .failures_remaining
