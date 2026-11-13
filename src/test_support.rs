@@ -18,6 +18,8 @@ pub struct Probe {
     events: Arc<Mutex<Vec<String>>>,
     active: Arc<AtomicUsize>,
     max_active: Arc<AtomicUsize>,
+    active_loads: Arc<AtomicUsize>,
+    max_active_loads: Arc<AtomicUsize>,
 }
 
 impl Probe {
@@ -40,6 +42,10 @@ impl Probe {
 
     pub fn max_concurrent_evaluations(&self) -> usize {
         self.max_active.load(Ordering::SeqCst)
+    }
+
+    pub fn max_concurrent_loads(&self) -> usize {
+        self.max_active_loads.load(Ordering::SeqCst)
     }
 
     fn filtered(&self, prefix: &str) -> Vec<String> {
@@ -219,7 +225,19 @@ impl ModelLoader for FakeLoader {
     }
 
     fn load(&self, model_id: &str) -> Result<FakeModel> {
+        struct ActiveLoad<'a>(&'a AtomicUsize);
+        impl Drop for ActiveLoad<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+
         self.check(model_id)?;
+        let now_active = self.probe.active_loads.fetch_add(1, Ordering::SeqCst) + 1;
+        self.probe
+            .max_active_loads
+            .fetch_max(now_active, Ordering::SeqCst);
+        let _active = ActiveLoad(&self.probe.active_loads);
         std::thread::sleep(self.load_delay);
         let should_fail = self
             .failures_remaining

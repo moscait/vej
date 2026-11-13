@@ -138,7 +138,7 @@ pub struct ModelManager<L: ModelLoader> {
     default_keep_alive: KeepAlive,
     shared: Arc<Shared<L::Model>>,
     /// Serializes loads and switches so concurrent requests trigger a single load.
-    load_lock: tokio::sync::Mutex<()>,
+    load_lock: Arc<tokio::sync::Mutex<()>>,
     reaper: JoinHandle<()>,
 }
 
@@ -194,7 +194,7 @@ impl<L: ModelLoader> ModelManager<L> {
             preferred_model,
             default_keep_alive,
             shared,
-            load_lock: tokio::sync::Mutex::new(()),
+            load_lock: Arc::new(tokio::sync::Mutex::new(())),
             reaper,
         })
     }
@@ -211,7 +211,7 @@ impl<L: ModelLoader> ModelManager<L> {
     /// Lease a model, loading it if needed. `requested = None` uses whatever is loaded,
     /// falling back to [`Self::default_model`]. `keep_alive = None` applies the server default.
     pub async fn acquire(
-        &self,
+        self: &Arc<Self>,
         requested: Option<&str>,
         keep_alive: Option<KeepAlive>,
     ) -> Result<ModelLease<L::Model>> {
@@ -221,17 +221,23 @@ impl<L: ModelLoader> ModelManager<L> {
             return Ok(lease);
         }
 
-        let _load_guard = self.load_lock.lock().await;
+        let load_guard = Arc::clone(&self.load_lock).lock_owned().await;
         // Another task may have loaded the model while we waited for the lock.
         if let Some(lease) = self.try_lease(target.as_deref(), keep_alive) {
             return Ok(lease);
         }
 
         let model_id = target.unwrap_or_else(|| self.default_model());
-        self.check_blocking(&model_id).await?;
-        self.evict_and_drain().await;
-        let model = self.load_blocking(&model_id).await?;
-        Ok(self.install(model_id, model, keep_alive))
+        let manager = Arc::clone(self);
+        tokio::spawn(async move {
+            let _load_guard = load_guard;
+            manager.check_blocking(&model_id).await?;
+            manager.evict_and_drain().await;
+            let model = manager.load_blocking(&model_id).await?;
+            Ok(manager.install(model_id, model, keep_alive))
+        })
+        .await
+        .context("model load task panicked")?
     }
 
     /// Unload the current model now, or as soon as in-flight requests finish.
@@ -683,5 +689,23 @@ mod tests {
         assert_eq!(probe.drops(), Vec::<String>::new());
         assert_eq!(m.status().unwrap().model_id, "model-a");
         assert_eq!(m.default_model(), "model-a");
+    }
+
+    #[tokio::test]
+    async fn cancelled_acquire_keeps_load_serialized_and_reuses_result() {
+        let (loader, probe) = FakeLoader::new();
+        let m = manager_with(loader.with_load_delay(Duration::from_millis(200)), secs(60));
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), m.acquire(None, None))
+                .await
+                .is_err(),
+            "first acquire should time out while load is still running"
+        );
+
+        let lease = m.acquire(None, None).await.unwrap();
+        assert_eq!(lease.model_id(), "model-a");
+        assert_eq!(probe.loads(), ["model-a"]);
+        assert_eq!(probe.max_concurrent_loads(), 1);
     }
 }
