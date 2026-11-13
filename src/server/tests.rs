@@ -578,3 +578,147 @@ async fn access_guard_rejects_cross_site_and_rebinding_requests() {
     assert_eq!(status, StatusCode::OK, "same-origin playground request");
     assert!(probe.events().is_empty());
 }
+
+#[tokio::test]
+async fn jev_proxy_maps_timeout_to_504_with_json_error() {
+    let client = handlers::build_jev_client(Duration::from_millis(50), Duration::from_millis(80))
+        .expect("build jev client");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        if let Ok((_stream, _)) = listener.accept().await {
+            std::future::pending::<()>().await;
+        }
+    });
+
+    let res = handlers::forward_jev_request(
+        &client,
+        &format!("http://{addr}/v1/systemone"),
+        &HeaderMap::new(),
+        Bytes::from_static(b"{}"),
+    )
+    .await;
+
+    assert_eq!(res.status(), StatusCode::GATEWAY_TIMEOUT);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let err_json: Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        err_json["error"]
+            .as_str()
+            .is_some_and(|s| s.contains("TypeSafe AI")),
+        "unexpected error body: {err_json}"
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn jev_proxy_maps_body_timeout_to_504_with_json_error() {
+    use tokio::io::AsyncWriteExt;
+
+    let client = handlers::build_jev_client(Duration::from_millis(50), Duration::from_millis(80))
+        .expect("build jev client");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        if let Ok((mut stream, _)) = listener.accept().await {
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{\"pa")
+                .await;
+            std::future::pending::<()>().await;
+        }
+    });
+
+    let res = handlers::forward_jev_request(
+        &client,
+        &format!("http://{addr}/v1/systemone"),
+        &HeaderMap::new(),
+        Bytes::from_static(b"{}"),
+    )
+    .await;
+
+    assert_eq!(res.status(), StatusCode::GATEWAY_TIMEOUT);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let err_json: Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        err_json["error"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("Failed to reach TypeSafe AI:")),
+        "unexpected error body: {err_json}"
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn jev_proxy_maps_connection_failure_to_502_with_json_error() {
+    let client = handlers::build_jev_client(Duration::from_millis(50), Duration::from_millis(80))
+        .expect("build jev client");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+
+    let res = handlers::forward_jev_request(
+        &client,
+        &format!("http://{addr}/v1/systemone"),
+        &HeaderMap::new(),
+        Bytes::from_static(b"{}"),
+    )
+    .await;
+
+    assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let err_json: Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        err_json["error"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("Failed to reach TypeSafe AI:")),
+        "unexpected error body: {err_json}"
+    );
+}
+
+#[tokio::test]
+async fn jev_proxy_forwards_ok_response_and_reuses_shared_client() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let client = handlers::build_jev_client(Duration::from_millis(200), Duration::from_secs(2))
+        .expect("build jev client");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server_task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut buf = [0u8; 1024];
+        let n = stream.read(&mut buf).await.unwrap();
+        let raw_req = String::from_utf8_lossy(&buf[..n]).to_string();
+        let payload = r#"{"decision":"ok"}"#;
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+            payload.len()
+        );
+        stream.write_all(reply.as_bytes()).await.unwrap();
+        raw_req
+    });
+
+    let mut headers = HeaderMap::new();
+    headers.insert(header::AUTHORIZATION, "Bearer secret-key".parse().unwrap());
+    let res = handlers::forward_jev_request(
+        &client,
+        &format!("http://{addr}/v1/systemone"),
+        &headers,
+        Bytes::from_static(br#"{"state":"hi"}"#),
+    )
+    .await;
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let ok_bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let ok_json: Value = serde_json::from_slice(&ok_bytes).unwrap();
+    assert_eq!(ok_json, json!({ "decision": "ok" }));
+    let raw_req = server_task.await.unwrap();
+    assert!(
+        raw_req
+            .to_lowercase()
+            .contains("authorization: bearer secret-key")
+    );
+
+    let a = handlers::shared_jev_client().unwrap();
+    let b = handlers::shared_jev_client().unwrap();
+    assert!(std::ptr::eq(a, b));
+}
