@@ -7,11 +7,22 @@ use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::token::LlamaToken;
 use std::num::NonZeroU32;
 
-use super::DecisionEngine;
 use super::limits;
 use super::prompt::add_bos_for;
+use super::{DecisionEngine, EngineCore};
 
 impl DecisionEngine {
+    pub fn generate_text(
+        &self,
+        user_prompt: &str,
+        system: Option<&str>,
+        max_tokens: usize,
+    ) -> Result<String> {
+        self.core.generate_text(user_prompt, system, max_tokens)
+    }
+}
+
+impl EngineCore {
     /// Raw bytes for a generated token, retrying with the exact buffer size llama.cpp
     /// asks for (non-deprecated equivalent of `token_to_bytes(token, Special::Plaintext)`).
     fn token_piece_bytes(&self, token: LlamaToken) -> Option<Vec<u8>> {

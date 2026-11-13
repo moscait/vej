@@ -4,6 +4,7 @@ mod choices;
 mod evaluate;
 mod generate;
 mod limits;
+mod pool;
 mod prompt;
 mod scoring;
 mod types;
@@ -57,6 +58,7 @@ pub struct EngineLoader {
     pub n_gpu_layers: u32,
     pub threads: u32,
     pub n_ctx: u32,
+    pub max_concurrent: usize,
 }
 
 impl EngineLoader {
@@ -86,13 +88,14 @@ impl ModelLoader for EngineLoader {
     fn load(&self, model_id: &str) -> Result<DecisionEngine> {
         let path = Self::resolve_existing_file(model_id)?;
         let template = find_model_spec(model_id).map(|spec| spec.template);
-        DecisionEngine::load(
+        DecisionEngine::load_with_concurrency(
             &path,
             model_id.to_string(),
             template,
             self.n_gpu_layers,
             self.threads,
             self.n_ctx,
+            self.max_concurrent,
         )
     }
 }
@@ -116,14 +119,21 @@ impl DecisionModel for DecisionEngine {
     }
 }
 
-pub struct DecisionEngine {
-    backend: &'static LlamaBackend,
-    model: Arc<LlamaModel>,
-    model_id: String,
-    template: TemplateStyle,
-    threads: u32,
-    n_ctx: u32,
+pub(crate) struct EngineCore {
+    pub(crate) backend: &'static LlamaBackend,
+    pub(crate) model: Arc<LlamaModel>,
+    pub(crate) model_id: String,
+    pub(crate) template: TemplateStyle,
+    pub(crate) threads: u32,
+    pub(crate) n_ctx: u32,
     special_guard: prompt::SpecialTokenGuard,
+}
+
+/// Loaded decision model paired with persistent inference worker contexts.
+pub struct DecisionEngine {
+    // Dropped before `core` so workers exit and destroy their `LlamaContext` instances first.
+    pool: pool::ContextPool,
+    core: Arc<EngineCore>,
 }
 
 impl DecisionEngine {
@@ -134,6 +144,26 @@ impl DecisionEngine {
         n_gpu_layers: u32,
         threads: u32,
         n_ctx: u32,
+    ) -> Result<Self> {
+        Self::load_with_concurrency(
+            model_path,
+            model_id,
+            template,
+            n_gpu_layers,
+            threads,
+            n_ctx,
+            1,
+        )
+    }
+
+    pub fn load_with_concurrency(
+        model_path: &Path,
+        model_id: String,
+        template: Option<TemplateStyle>,
+        n_gpu_layers: u32,
+        threads: u32,
+        n_ctx: u32,
+        max_concurrent: usize,
     ) -> Result<Self> {
         let backend = llama_backend()?;
         let model_params = LlamaModelParams::default()
@@ -155,7 +185,7 @@ impl DecisionEngine {
         let resolved_template = prompt::resolve_template(&model_id, template);
         let special_guard = prompt::SpecialTokenGuard::from_model(&model)?;
 
-        Ok(Self {
+        let core = Arc::new(EngineCore {
             backend,
             model: Arc::new(model),
             model_id,
@@ -163,16 +193,50 @@ impl DecisionEngine {
             threads,
             n_ctx,
             special_guard,
-        })
+        });
+        let pool = pool::ContextPool::start(Arc::clone(&core), max_concurrent)?;
+
+        Ok(Self { pool, core })
     }
 
     pub fn neutralize_user_text(&self, text: &str) -> String {
-        self.special_guard.neutralize(text)
+        self.core.neutralize_user_text(text)
     }
 
     /// Returns true if `text` tokenizes (with `AddBos::Never`) into any control or
     /// user-defined special token.
     pub fn contains_special_tokens(&self, text: &str) -> Result<bool> {
+        self.core.contains_special_tokens(text)
+    }
+
+    /// Returns a control or user-defined special token from the loaded model's vocabulary, if any.
+    pub fn sample_special_token(&self) -> Option<String> {
+        self.core.sample_special_token()
+    }
+
+    pub fn format_generation_prompt(&self, system: Option<&str>, prompt_str: &str) -> String {
+        self.core.format_generation_prompt(system, prompt_str)
+    }
+
+    pub fn create_context_with_size(
+        &self,
+        min_size: u32,
+        n_sequences: u32,
+    ) -> Result<LlamaContext<'_>> {
+        self.core.create_context_with_size(min_size, n_sequences)
+    }
+
+    pub fn create_context(&self) -> Result<LlamaContext<'_>> {
+        self.core.create_context()
+    }
+}
+
+impl EngineCore {
+    pub(crate) fn neutralize_user_text(&self, text: &str) -> String {
+        self.special_guard.neutralize(text)
+    }
+
+    pub(crate) fn contains_special_tokens(&self, text: &str) -> Result<bool> {
         let tokens = self
             .model
             .str_to_token(text, llama_cpp_2::model::AddBos::Never)
@@ -185,8 +249,7 @@ impl DecisionEngine {
         }))
     }
 
-    /// Returns a control or user-defined special token from the loaded model's vocabulary, if any.
-    pub fn sample_special_token(&self) -> Option<String> {
+    pub(crate) fn sample_special_token(&self) -> Option<String> {
         prompt::collect_special_tokens(&self.model)
             .into_iter()
             .find(|tok| self.contains_special_tokens(tok).unwrap_or(false))
@@ -219,11 +282,15 @@ impl DecisionEngine {
         prompt::format_decision_prompt(self.template, instruction, state_str, choices, scheme)
     }
 
-    pub fn format_generation_prompt(&self, system: Option<&str>, prompt_str: &str) -> String {
+    pub(crate) fn format_generation_prompt(
+        &self,
+        system: Option<&str>,
+        prompt_str: &str,
+    ) -> String {
         prompt::format_generation_prompt(self.template, system, prompt_str)
     }
 
-    pub fn create_context_with_size(
+    pub(crate) fn create_context_with_size(
         &self,
         min_size: u32,
         n_sequences: u32,
@@ -262,7 +329,7 @@ impl DecisionEngine {
             .map_err(|e| anyhow!("Failed to create batch inference context: {:?}", e))
     }
 
-    pub fn create_context(&self) -> Result<LlamaContext<'_>> {
+    pub(crate) fn create_context(&self) -> Result<LlamaContext<'_>> {
         self.create_context_with_size(0, 1)
     }
 
@@ -296,6 +363,7 @@ mod tests {
             n_gpu_layers: 0,
             threads: 1,
             n_ctx: 512,
+            max_concurrent: 1,
         };
         assert_eq!(loader.canonical_id("LLAMA-3.2-1B"), "llama-3.2-1b");
         assert_eq!(
@@ -310,6 +378,7 @@ mod tests {
             n_gpu_layers: 0,
             threads: 1,
             n_ctx: 512,
+            max_concurrent: 1,
         };
         let err = loader
             .load("/nonexistent/model.gguf")
@@ -331,6 +400,7 @@ mod tests {
             n_gpu_layers: 0,
             threads: 1,
             n_ctx: 512,
+            max_concurrent: 1,
         };
         assert!(loader.check("/nonexistent/model.gguf").is_err());
 

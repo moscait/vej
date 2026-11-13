@@ -59,6 +59,7 @@ async fn handle_serve(args: ServeArgs, config: Config) -> Result<()> {
         n_gpu_layers: settings.n_gpu_layers,
         threads: settings.threads,
         n_ctx: settings.n_ctx,
+        max_concurrent: settings.max_concurrent,
     };
     // Take the socket before loading anything so a busy port fails fast.
     let (listener, activated) = if settings.tcp {
