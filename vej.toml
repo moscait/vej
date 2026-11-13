@@ -4,10 +4,13 @@
 # ==============================================================================
 
 # Default active model to load when running `vej serve` or `vej decide`
-# Supported presets:
-#   - "llama-3.2-1b"  (Meta, USA) - Fastest latency (~6-12ms, 0.75 GB)
-#   - "smollm2-1.7b"  (Hugging Face, USA/France) - Top reasoning balance (1.05 GB)
-#   - "gemma-2-2b"    (Google, USA) - Highest decision accuracy (1.63 GB)
+# Supported presets (see `vej models list`):
+#   - "llama-3.2-1b"    (Meta, USA)               - Fastest (0.75 GB)
+#   - "smollm2-1.7b"    (Hugging Face, USA/France) - Small, Apache 2.0 (1.05 GB)
+#   - "llama-3.2-3b"    (Meta, USA)               - Accuracy/speed sweet spot (2.02 GB)
+#   - "granite-4.2-3b"  (IBM, USA)                - Apache 2.0, 3B class (2.09 GB)
+#   - "gemma-4-e2b"     (Google, USA)             - Default (1.85 GB)
+#   - "llama-3.1-8b"    (Meta, USA)               - Highest capacity (4.92 GB)
 # Or provide a direct path to any custom GGUF file.
 default_model = "gemma-4-e2b"
 

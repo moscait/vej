@@ -622,9 +622,8 @@ flowchart TD
 | `smollm2-1.7b` | `SmolLM2-1.7B-Instruct` | Hugging Face (USA/FR) | ~1.05 GB | `TemplateStyle::ChatML` | `bartowski/SmolLM2-1.7B-Instruct-GGUF` |
 | `llama-3.2-3b` | `Llama-3.2-3B-Instruct` | Meta (USA) | ~2.02 GB | `TemplateStyle::Llama3` | `bartowski/Llama-3.2-3B-Instruct-GGUF` |
 | `llama-3.1-8b` | `Llama-3.1-8B-Instruct` | Meta (USA) | ~4.92 GB | `TemplateStyle::Llama3` | `bartowski/Meta-Llama-3.1-8B-Instruct-GGUF` |
-| `gemma-2-2b` | `Gemma-2-2B-IT` | Google (USA) | ~1.63 GB | `TemplateStyle::Gemma` | `bartowski/gemma-2-2b-it-GGUF` |
-| `gemma-2-9b` | `Gemma-2-9B-IT` | Google (USA) | ~5.44 GB | `TemplateStyle::Gemma` | `bartowski/gemma-2-9b-it-GGUF` |
-| `gemma-4-e2b` | `Gemma-4-E2B-IT` | Google (USA) | ~1.85 GB | `TemplateStyle::Gemma4` | `bartowski/gemma-4-E2B-it-GGUF` |
+| `granite-4.2-3b` | `Granite-4.2-3B-Instruct` | IBM (USA) | ~2.09 GB | `TemplateStyle::ChatML` | `ibm-granite/granite-4.2-3b-GGUF` |
+| `gemma-4-e2b` | `Gemma-4-E2B-IT` | Google (USA) | ~1.85 GB | `TemplateStyle::Gemma4` | `unsloth/gemma-4-E2B-it-GGUF` |
 
 ---
 
@@ -725,7 +724,7 @@ $$z'_i = z_i - z_{\max}$$
 The calibrated probability for choice $c_i$ under temperature $T$ is computed strictly over the restricted candidate set:
 $$P(c_i) = \frac{\exp\left(\frac{z'_i}{T}\right)}{\sum_{j=1}^K \exp\left(\frac{z'_j}{T}\right)}$$
 - Total forward passes: **1 (prefill batch only, 0 decode steps)**.
-- Latency: **5–25 ms** on Apple Silicon GPU / NVIDIA CUDA.
+- Latency: about **64 ms** of engine time for a short 3-choice decision with `llama-3.2-1b` on an Apple M2 Pro (Metal); varies with hardware, model size and prompt length.
 - Confidence: **Exact, mathematically grounded probability distribution**.
 - Failure mode: **Zero chance of invalid options or malformed JSON**.
 
@@ -736,7 +735,7 @@ $$P(c_i) = \frac{\exp\left(\frac{z'_i}{T}\right)}{\sum_{j=1}^K \exp\left(\frac{z
 | Property | Standard LLM (Ollama / vLLM / OpenAI) | `vej` (Zero-Decode System 1) |
 |:---|:---|:---|
 | **Forward Passes** | 1 prefill + $N$ autoregressive decode steps ($N \approx 50\text{--}200$) | **1 single prefill pass (0 decode steps)** |
-| **Typical Latency** | 500 ms – 5,000 ms | **5 ms – 25 ms** |
+| **Typical Latency** | 500 ms – 5,000 ms | **~64 ms** (`llama-3.2-1b`, Apple M2 Pro) |
 | **Output Type** | Unstructured text / Free-form JSON | **Strictly typed choice & probability distribution** |
 | **Scoring Output** | Hallucinated numeric string | **Expected value $E[\text{score}] = \sum k \cdot P(k)$** |
 | **Confidence Metric** | Hallucinated text string in JSON | **Calibrated Restricted Softmax from raw model logits** |

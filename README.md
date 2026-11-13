@@ -30,7 +30,7 @@ While functional, sequential token generation is inherently memory-bandwidth-bou
 | **Output Tokens** | ~30 – 50 tokens (JSON string) | ~30 – 50 tokens (JSON string) | **0 tokens** (reads logits directly) |
 | **Confidence Scoring** | Argmax / saturated one-hot (`1.0`) | Hallucinated number emitted in JSON text | **Calibrated restricted softmax** |
 | **Data Privacy** | Sent to third-party cloud | 100% on-device local | **100% on-device local** |
-| **Typical Latency** | ~250 – 400 ms (network + decode) | ~400 – 1500 ms (local decode loop) | **~150 – 220 ms** (prefill only) |
+| **Typical Latency** | ~250 – 400 ms (network + decode) | ~400 – 1500 ms (local decode loop) | **~85 ms** end to end with `llama-3.2-1b` on an Apple M2 Pro (prefill only) |
 | **Runtime Footprint** | None (cURL / API client) | Heavy runtime (Python, vLLM, or Ollama) | Lightweight native binary (~11 MB) |
 | **API Compatibility** | Native Jev specification | Partial / wrapper schemas | Full drop-in Jev schema support |
 
@@ -118,24 +118,23 @@ Open your browser to:
 
 `vej` comes pre-configured with a catalog of high-efficiency models from the U.S. and allied nations, ranging from ultra-low latency sub-billion parameter models to high-capacity 8B reasoning models:
 
-| Preset ID | Model Name | Vendor (Origin) | Size (Q4_K_M) | Best For | Typical Daemon Latency* |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **`llama-3.2-1b`** | Llama-3.2-1B-Instruct | Meta (USA 🇺🇸) | ~0.75 GB | **Maximum Speed:** Shallowest layer depth, ultra-fast prefill, perimeter firewalls | **~150 – 220 ms** |
-| **`smollm2-1.7b`** | SmolLM2-1.7B-Instruct | Hugging Face (USA / France 🇫🇷) | ~1.05 GB | **Open Science / Efficiency:** Apache 2.0 license, outstanding reasoning density | **~180 – 260 ms** |
-| **`llama-3.2-3b`** | Llama-3.2-3B-Instruct | Meta (USA 🇺🇸) | ~2.02 GB | **Recommended Sweet Spot:** Highest accuracy-to-latency ratio, complex multi-class screening (e.g. 10+ talent categories) | **~220 – 330 ms** |
-| **`llama-3.1-8b`** | Llama-3.1-8B-Instruct | Meta (USA 🇺🇸) | ~4.92 GB | **Maximum Reasoning Power:** Frontier-grade zero-shot taxonomy comprehension, deep technical evaluation | **~380 – 580 ms** |
-| **`gemma-2-2b`** | Gemma-2-2B-IT | Google (USA 🇺🇸) | ~1.63 GB | **Distilled Architecture:** Distilled from Gemini, strong multi-lingual understanding | **~240 – 350 ms** |
-| **`gemma-2-9b`** | Gemma-2-9B-IT | Google (USA 🇺🇸) | ~5.44 GB | **Heavyweight Policy & Guardrails:** Distilled from Gemini 27B, top-tier resistance to superficial keyword biases | **~420 – 650 ms** |
-| **`gemma-4-e2b`** | Gemma-4-E2B-IT | Google (USA 🇺🇸) | ~1.85 GB | **Next-Gen Gemma 4 Architecture:** Google's latest edge architecture, updated `<|turn>` control tokens, Apache 2.0 | **~220 – 340 ms** |
+| Preset ID | Model Name | Vendor (Origin) | Size (Q4_K_M) | Best For |
+| :--- | :--- | :--- | :--- | :--- |
+| **`llama-3.2-1b`** | Llama-3.2-1B-Instruct | Meta (USA 🇺🇸) | ~0.75 GB | **Maximum Speed:** Shallowest layer depth, ultra-fast prefill, perimeter firewalls |
+| **`smollm2-1.7b`** | SmolLM2-1.7B-Instruct | Hugging Face (USA / France 🇫🇷) | ~1.05 GB | **Open Science / Efficiency:** Apache 2.0 license, outstanding reasoning density |
+| **`llama-3.2-3b`** | Llama-3.2-3B-Instruct | Meta (USA 🇺🇸) | ~2.02 GB | **Recommended Sweet Spot:** Highest accuracy-to-latency ratio, complex multi-class screening (e.g. 10+ talent categories) |
+| **`llama-3.1-8b`** | Llama-3.1-8B-Instruct | Meta (USA 🇺🇸) | ~4.92 GB | **Maximum Reasoning Power:** Frontier-grade zero-shot taxonomy comprehension, deep technical evaluation |
+| **`granite-4.2-3b`** | Granite-4.2-3B-Instruct | IBM (USA 🇺🇸) | ~2.09 GB | **Enterprise-Oriented:** IBM's compact instruct model, Apache 2.0 |
+| **`gemma-4-e2b`** | Gemma-4-E2B-IT | Google (USA 🇺🇸) | ~1.85 GB | **Next-Gen Gemma 4 Architecture (Default):** Google's latest edge architecture, updated `<|turn>` control tokens, Apache 2.0 |
 
-*\*Typical end-to-end response time on Apple Silicon (M-series Metal) for realistic context prompts (100–250 tokens) in daemon mode. Cold CLI one-off invocations include additional one-time process initialization (~100–150 ms).*
+*Latency depends on hardware, model size and prompt length. Measured reference: a short 3-choice decision with `llama-3.2-1b` on an Apple M2 Pro (Metal) takes about 64 ms of engine time (`latency_ms`) and about 84 ms end to end over HTTP. Larger models take proportionally longer. Cold CLI one-off invocations also pay one-time model loading.*
 
 ### 💡 Model Selection Guide: Which Should You Choose?
 
 - **Use `llama-3.2-1b`** when raw turnaround speed is paramount (e.g., real-time prompt injection firewalls, simple yes/no policy checks, high-volume automated support routing).
-- **Use `llama-3.2-3b` (Suggested Default)** when performing nuanced multi-class classification (e.g., resume screening, talent profile attribution, ambiguous error recovery). In testing, the 3B model achieves near-cloud parity with hosted Jev while maintaining sub-350ms latency.
+- **Use `llama-3.2-3b` (Suggested Default)** when performing nuanced multi-class classification (e.g., resume screening, talent profile attribution, ambiguous error recovery). In testing, the 3B model achieves near-cloud parity with hosted Jev.
 - **Use `llama-3.1-8b`** when evaluating dense technical criteria (e.g. code architecture reviews, deep systems engineering depth, complex legal or compliance taxonomy).
-- **Use `gemma-2-9b`** when evaluating high-stakes security guardrails, policy edge cases, or complex trade-offs where resisting superficial keyword traps and positional biases is critical.
+- **Use `granite-4.2-3b`** for an IBM-backed, Apache 2.0 alternative in the same size class as `llama-3.2-3b`.
 - **Use `gemma-4-e2b`** to run Google's newest 2026 Gemma 4 generation on an edge-efficient parameter footprint with native `<|turn>` token handling under Apache 2.0.
 - **Use `smollm2-1.7b`** when an unencumbered Apache 2.0 license is required.
 
@@ -157,15 +156,14 @@ vej models pull llama-3.2-1b   # Fast 1B model (~0.75 GB)
 vej models pull llama-3.2-3b   # Recommended 3B model (~2.02 GB)
 vej models pull llama-3.1-8b   # Frontier 8B model (~4.92 GB)
 vej models pull smollm2-1.7b   # SmolLM2 1.7B (~1.05 GB)
-vej models pull gemma-2-2b     # Gemma 2 2B (~1.63 GB)
-vej models pull gemma-2-9b     # Gemma 2 9B Heavyweight (~5.44 GB)
-vej models pull gemma-4-e2b    # Gemma 4 E2B (~1.85 GB)
+vej models pull granite-4.2-3b # IBM Granite 4.2 3B (~2.09 GB)
+vej models pull gemma-4-e2b    # Gemma 4 E2B, the default (~1.85 GB)
 ```
 
 ### 2. Configuration File (`vej.toml`)
 Initialize or edit `vej.toml`:
 ```toml
-# Default model to load: "llama-3.2-1b", "llama-3.2-3b", "llama-3.1-8b", "smollm2-1.7b", "gemma-2-2b", "gemma-2-9b", or "gemma-4-e2b"
+# Default model to load: "llama-3.2-1b", "llama-3.2-3b", "llama-3.1-8b", "smollm2-1.7b", "granite-4.2-3b", or "gemma-4-e2b"
 default_model = "llama-3.2-3b"
 
 host = "127.0.0.1"
@@ -203,7 +201,7 @@ Switch the active model without restarting the daemon:
 ```bash
 curl -X POST http://127.0.0.1:8080/v1/models/switch \
   -H "Content-Type: application/json" \
-  -d '{"model": "gemma-2-2b"}'
+  -d '{"model": "gemma-4-e2b"}'
 ```
 
 ---
@@ -291,7 +289,7 @@ http://127.0.0.1:8080/playground
 
 #### Playground Capabilities:
 - **Multi-Target Switcher:** Evaluate decisions against **Local `vej`**, **Hosted `Jev`**, or run in **Dual Compare Mode** to benchmark both side-by-side in real-time.
-- **Model Selector:** Choose between `llama-3.2-1b`, `llama-3.2-3b`, `llama-3.1-8b`, `smollm2-1.7b`, `gemma-2-2b`, `gemma-2-9b`, or `gemma-4-e2b`.
+- **Model Selector:** Choose between `llama-3.2-1b`, `llama-3.2-3b`, `llama-3.1-8b`, `smollm2-1.7b`, `granite-4.2-3b`, or `gemma-4-e2b`.
 - **Dual Input State Modes:** Toggle between free-form **Text Mode** and structured **JSON Mode** with live syntax validation and one-click JSON formatting.
 - **Dual Questions & Primitives Editor:** 
   - **Visual Builder:** Interactive cards for configuring **`Choice`** (multi-class), **`Noul`** (yes/no boolean), and **`Score`** (continuous expected value) primitives.
