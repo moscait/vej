@@ -140,13 +140,21 @@ impl DecisionEngine {
         })
     }
 
-    pub fn format_prompt(
+    pub(crate) fn plan_scoring(
+        &self,
+        choices: &[ChoiceItem],
+    ) -> std::result::Result<scoring::ScoringPlan, InvalidRequest> {
+        scoring::resolve_scoring_plan(self.model.as_ref(), choices)
+    }
+
+    pub(crate) fn format_prompt(
         &self,
         instruction: Option<&str>,
         state_str: &str,
         choices: &[ChoiceItem],
+        scheme: scoring::LabelScheme,
     ) -> String {
-        prompt::format_decision_prompt(self.template, instruction, state_str, choices)
+        prompt::format_decision_prompt(self.template, instruction, state_str, choices, scheme)
     }
 
     pub fn format_generation_prompt(&self, prompt_str: &str) -> String {
@@ -196,13 +204,14 @@ impl DecisionEngine {
         self.create_context_with_size(0, 1)
     }
 
-    pub fn score_choices_from_logits(
+    pub(crate) fn score_choices_from_logits(
         &self,
         logits: &[f32],
         choices: &[ChoiceItem],
+        plan: &scoring::ScoringPlan,
         temperature: f32,
     ) -> (String, f32, HashMap<String, f32>) {
-        scoring::score_choices_from_logits(&self.model, logits, choices, temperature)
+        scoring::score_choices_from_logits(logits, choices, plan, temperature)
     }
 }
 

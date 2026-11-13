@@ -5,6 +5,7 @@ use llama_cpp_2::model::AddBos;
 use crate::models::{TemplateStyle, find_model_spec};
 
 use super::limits::LETTER_LABELS;
+use super::scoring::LabelScheme;
 use super::types::ChoiceItem;
 
 pub(crate) fn resolve_template(
@@ -40,55 +41,54 @@ pub(crate) fn format_decision_prompt(
     instruction: Option<&str>,
     state_str: &str,
     choices: &[ChoiceItem],
+    scheme: LabelScheme,
 ) -> String {
-    let is_boolean = choices.len() == 2
-        && choices.iter().any(|c| c.key.eq_ignore_ascii_case("true"))
-        && choices.iter().any(|c| c.key.eq_ignore_ascii_case("false"));
-
-    let is_numeric = !is_boolean && choices.iter().all(|c| c.key.parse::<u32>().is_ok());
-
-    let (system_msg, formatted_options, selection_prompt) = if is_boolean {
-        let mut opts = String::new();
-        for item in choices {
-            opts.push_str(&format!("\n- {}: {}", item.key, item.display));
+    let (system_msg, formatted_options, selection_prompt) = match scheme {
+        LabelScheme::Boolean => {
+            let mut opts = String::new();
+            for item in choices {
+                opts.push_str(&format!("\n- {}: {}", item.key, item.display));
+            }
+            (
+                "You are a precise, low-latency decision system. Evaluate the input state and criteria, then respond with true or false.",
+                opts,
+                "Select true or false:".to_string(),
+            )
         }
-        (
-            "You are a precise, low-latency decision system. Evaluate the input state and criteria, then respond with true or false.",
-            opts,
-            "Select true or false:".to_string(),
-        )
-    } else if is_numeric {
-        let mut opts = String::new();
-        for item in choices {
-            opts.push_str(&format!("\n{}) {}", item.key, item.display));
+        LabelScheme::Numeric => {
+            let mut opts = String::new();
+            for item in choices {
+                opts.push_str(&format!("\n{}) {}", item.key, item.display));
+            }
+            let num_list = choices
+                .iter()
+                .map(|c| c.key.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            (
+                "You are a precise, low-latency scoring system. Evaluate the input state and criteria, then respond with the single score number.",
+                opts,
+                format!("Select the best score from [{}]:", num_list),
+            )
         }
-        let num_list = choices
-            .iter()
-            .map(|c| c.key.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        (
-            "You are a precise, low-latency scoring system. Evaluate the input state and criteria, then respond with the single score number.",
-            opts,
-            format!("Select the best score from [{}]:", num_list),
-        )
-    } else {
-        let mut opts = String::new();
-        for (idx, item) in choices.iter().enumerate() {
-            let letter = LETTER_LABELS.get(idx).copied().unwrap_or("?");
-            opts.push_str(&format!("\n{letter}) {}", item.display));
+        LabelScheme::Letters => {
+            let mut opts = String::new();
+            for (idx, item) in choices.iter().enumerate() {
+                let letter = LETTER_LABELS.get(idx).copied().unwrap_or("?");
+                opts.push_str(&format!("\n{letter}) {}", item.display));
+            }
+            let letter_list = choices
+                .iter()
+                .enumerate()
+                .map(|(idx, _)| LETTER_LABELS.get(idx).copied().unwrap_or("?"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            (
+                "You are a precise, low-latency classification system. Evaluate the input state and criteria, then respond with ONLY the single letter of the best option.",
+                opts,
+                format!("Select the best option from [{}]:", letter_list),
+            )
         }
-        let letter_list = choices
-            .iter()
-            .enumerate()
-            .map(|(idx, _)| LETTER_LABELS.get(idx).copied().unwrap_or("?"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        (
-            "You are a precise, low-latency classification system. Evaluate the input state and criteria, then respond with ONLY the single letter of the best option.",
-            opts,
-            format!("Select the best option from [{}]:", letter_list),
-        )
     };
 
     let instr = instruction.unwrap_or("Analyze the state and choose the single best option.");
@@ -147,9 +147,78 @@ mod tests {
                 display: format!("Option {i}"),
             })
             .collect();
-        let prompt = format_decision_prompt(TemplateStyle::Llama3, None, "state", &choices);
+        let prompt = format_decision_prompt(
+            TemplateStyle::Llama3,
+            None,
+            "state",
+            &choices,
+            LabelScheme::Letters,
+        );
         assert!(prompt.contains("\nZ) Option 25"), "{prompt}");
         assert!(prompt.contains(", Z]"), "{prompt}");
         assert!(!prompt.contains("?)"), "{prompt}");
+    }
+
+    #[test]
+    fn format_decision_prompt_honors_boolean_and_numeric_schemes() {
+        let bool_choices = vec![
+            ChoiceItem {
+                key: "true".into(),
+                display: "Yes".into(),
+            },
+            ChoiceItem {
+                key: "false".into(),
+                display: "No".into(),
+            },
+        ];
+        let bool_prompt = format_decision_prompt(
+            TemplateStyle::ChatML,
+            None,
+            "state",
+            &bool_choices,
+            LabelScheme::Boolean,
+        );
+        assert!(bool_prompt.contains("- true: Yes"), "{bool_prompt}");
+        assert!(
+            bool_prompt.contains("Select true or false:"),
+            "{bool_prompt}"
+        );
+
+        let num_choices = vec![
+            ChoiceItem {
+                key: "0".into(),
+                display: "None".into(),
+            },
+            ChoiceItem {
+                key: "1".into(),
+                display: "One".into(),
+            },
+        ];
+        let num_prompt = format_decision_prompt(
+            TemplateStyle::ChatML,
+            None,
+            "state",
+            &num_choices,
+            LabelScheme::Numeric,
+        );
+        assert!(num_prompt.contains("\n0) None"), "{num_prompt}");
+        assert!(
+            num_prompt.contains("Select the best score from [0, 1]:"),
+            "{num_prompt}"
+        );
+
+        let fallback_prompt = format_decision_prompt(
+            TemplateStyle::ChatML,
+            None,
+            "state",
+            &num_choices,
+            LabelScheme::Letters,
+        );
+        assert!(fallback_prompt.contains("\nA) None"), "{fallback_prompt}");
+        assert!(fallback_prompt.contains("\nB) One"), "{fallback_prompt}");
+        assert!(
+            fallback_prompt.contains("Select the best option from [A, B]:"),
+            "{fallback_prompt}"
+        );
     }
 }
