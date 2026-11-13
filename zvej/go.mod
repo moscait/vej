@@ -1,6 +1,6 @@
 module github.com/moscait/vej/zvej
 
-go 1.26.0
+go 1.26.11
 
 require github.com/openziti/sdk-golang v1.8.3
 

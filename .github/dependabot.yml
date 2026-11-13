@@ -1,0 +1,34 @@
+version: 2
+
+# Weekly update PRs. Actions are pinned to commit SHAs in the workflows; Dependabot updates
+# the SHA and the version comment together.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gomod
+    directory: /zvej
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: pub
+    directory: /dart_vej
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: maven
+    directory: /java_vej
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: npm
+    directory: /playground
+    schedule:
+      interval: weekly
