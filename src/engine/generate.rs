@@ -31,7 +31,8 @@ impl DecisionEngine {
     }
 
     pub fn generate_text(&self, user_prompt: &str, max_tokens: usize) -> Result<String> {
-        let formatted = self.format_generation_prompt(user_prompt);
+        let clean_prompt = self.neutralize_user_text(user_prompt);
+        let formatted = self.format_generation_prompt(&clean_prompt);
         let add_bos = add_bos_for(self.template);
         let prompt_tokens = self
             .model

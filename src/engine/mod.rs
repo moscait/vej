@@ -100,6 +100,7 @@ pub struct DecisionEngine {
     template: TemplateStyle,
     threads: u32,
     n_ctx: u32,
+    special_guard: prompt::SpecialTokenGuard,
 }
 
 impl DecisionEngine {
@@ -129,6 +130,7 @@ impl DecisionEngine {
         tracing::info!(elapsed = ?start.elapsed(), "Model successfully loaded");
 
         let resolved_template = prompt::resolve_template(&model_id, template);
+        let special_guard = prompt::SpecialTokenGuard::from_model(&model)?;
 
         Ok(Self {
             backend,
@@ -137,7 +139,22 @@ impl DecisionEngine {
             template: resolved_template,
             threads,
             n_ctx,
+            special_guard,
         })
+    }
+
+    pub fn neutralize_user_text(&self, text: &str) -> String {
+        self.special_guard.neutralize(text)
+    }
+
+    pub(crate) fn neutralize_choices(&self, choices: &[ChoiceItem]) -> Vec<ChoiceItem> {
+        choices
+            .iter()
+            .map(|c| ChoiceItem {
+                key: c.key.clone(),
+                display: self.neutralize_user_text(&c.display),
+            })
+            .collect()
     }
 
     pub(crate) fn plan_scoring(

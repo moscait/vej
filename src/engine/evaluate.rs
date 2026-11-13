@@ -53,7 +53,15 @@ impl DecisionEngine {
 
         let start_time = Instant::now();
         let plan = self.plan_scoring(choices)?;
-        let prompt = self.format_prompt(instruction, state_str, choices, plan.scheme);
+        let clean_state = self.neutralize_user_text(state_str);
+        let clean_instr = instruction.map(|s| self.neutralize_user_text(s));
+        let clean_choices = self.neutralize_choices(choices);
+        let prompt = self.format_prompt(
+            clean_instr.as_deref(),
+            &clean_state,
+            &clean_choices,
+            plan.scheme,
+        );
         let add_bos = add_bos_for(self.template);
         let prompt_tokens = self
             .model
@@ -233,7 +241,7 @@ impl DecisionEngine {
         let task_token_limit = (self.n_ctx.max(2048) as usize).min(batch_token_budget);
 
         for (item_idx, item) in req.items.iter().enumerate() {
-            let state_str = format_state_str(&item.state)?;
+            let state_str = self.neutralize_user_text(&format_state_str(&item.state)?);
             let item_questions = item.questions.as_ref().or(req.questions.as_ref());
             let item_choices = item.choices.as_ref().or(req.choices.as_ref());
             let item_instruction = item.instruction.as_ref().or(req.instruction.as_ref());
@@ -260,11 +268,13 @@ impl DecisionEngine {
                         anyhow!(InvalidRequest(format!("Question '{}' {}", q_name, e)))
                     })?;
                     let instr_str = format_instructions(&q_spec);
+                    let clean_instr = instr_str.as_deref().map(|s| self.neutralize_user_text(s));
+                    let clean_choices = self.neutralize_choices(&choice_items);
                     let scoring = self.cached_scoring_plan(&mut scoring_cache, &choice_items)?;
                     let prompt = self.format_prompt(
-                        instr_str.as_deref(),
+                        clean_instr.as_deref(),
                         &state_str,
-                        &choice_items,
+                        &clean_choices,
                         scoring.scheme,
                     );
                     let tokens = self.tokenize_batch_prompt(item_idx, &prompt, task_token_limit)?;
@@ -291,11 +301,13 @@ impl DecisionEngine {
                     })
                     .collect();
 
+                let clean_instr = item_instruction.map(|s| self.neutralize_user_text(s));
+                let clean_choices = self.neutralize_choices(&choice_items);
                 let scoring = self.cached_scoring_plan(&mut scoring_cache, &choice_items)?;
                 let prompt = self.format_prompt(
-                    item_instruction.map(|s| s.as_str()),
+                    clean_instr.as_deref(),
                     &state_str,
-                    &choice_items,
+                    &clean_choices,
                     scoring.scheme,
                 );
                 let tokens = self.tokenize_batch_prompt(item_idx, &prompt, task_token_limit)?;
