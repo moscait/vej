@@ -23,3 +23,6 @@ playground/dist/
 
 # Dart / Flutter
 .dart_tool/
+
+# Java
+java_vej/target/
