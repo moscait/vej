@@ -78,7 +78,7 @@ impl Drop for OwnedUnixSocket {
 pub fn bind_unix_socket(path: &std::path::Path) -> Result<OwnedUnixSocket> {
     use anyhow::bail;
     use std::os::unix::fs::{FileTypeExt, PermissionsExt};
-    use std::os::unix::net::{UnixListener, UnixStream};
+    use std::os::unix::net::UnixStream;
 
     match std::fs::symlink_metadata(path) {
         Ok(meta) if !meta.file_type().is_socket() => {
@@ -95,11 +95,11 @@ pub fn bind_unix_socket(path: &std::path::Path) -> Result<OwnedUnixSocket> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e).with_context(|| format!("cannot inspect {}", path.display())),
     }
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        prepare_socket_directory(dir)?;
     }
-    let listener = UnixListener::bind(path)
-        .with_context(|| format!("failed to listen on {}", path.display()))?;
+    let listener =
+        bind_owner_only(path).with_context(|| format!("failed to listen on {}", path.display()))?;
     let socket = OwnedUnixSocket {
         listener: Some(listener),
         path: path.to_path_buf(),
@@ -108,6 +108,76 @@ pub fn bind_unix_socket(path: &std::path::Path) -> Result<OwnedUnixSocket> {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
         .with_context(|| format!("cannot restrict permissions on {}", path.display()))?;
     Ok(socket)
+}
+
+/// Creates a missing socket directory as owner-only (0700) and warns when an existing one
+/// lets other users write to it (they could delete or replace the socket file).
+#[cfg(unix)]
+fn prepare_socket_directory(dir: &std::path::Path) -> Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .with_context(|| format!("cannot create {}", dir.display()))?;
+    let mode = std::fs::metadata(dir)
+        .with_context(|| format!("cannot inspect {}", dir.display()))?
+        .permissions()
+        .mode();
+    if let Some(reason) = shared_directory_reason(mode) {
+        tracing::warn!(
+            dir = %dir.display(),
+            mode = format!("{:o}", mode & 0o7777),
+            "The remote socket's directory is {reason}: other users could delete or replace \
+             the socket. Prefer a private (0700) directory."
+        );
+    }
+    Ok(())
+}
+
+/// Why a directory with this mode is unsafe for the remote socket, if it is.
+#[cfg(unix)]
+fn shared_directory_reason(mode: u32) -> Option<&'static str> {
+    if mode & 0o002 != 0 {
+        Some("world-writable")
+    } else if mode & 0o020 != 0 {
+        Some("group-writable")
+    } else {
+        None
+    }
+}
+
+/// Serializes every temporary umask change in vej, so concurrent binds can't save and
+/// restore each other's masks out of order.
+#[cfg(unix)]
+static UMASK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Runs `f` with the process umask set to `mask`, restoring the previous mask afterwards.
+#[cfg(unix)]
+fn with_umask<T>(mask: libc::mode_t, f: impl FnOnce() -> T) -> T {
+    // The guarded data is `()`, so a poisoned lock leaves nothing inconsistent.
+    let _guard = UMASK_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // SAFETY: umask only swaps the process file-mode creation mask and cannot fail.
+    let previous = unsafe { libc::umask(mask) };
+    let result = f();
+    // SAFETY: as above; restores the mask that was in place before.
+    unsafe { libc::umask(previous) };
+    result
+}
+
+/// Binds with a 0o077 umask so the socket file never exists with group or world access,
+/// even before the explicit chmod. The umask is process-wide, so it is restored right away;
+/// 0o077 (not 0o177) keeps anything created concurrently usable by its owner (directories
+/// get 0700, not an unusable 0600).
+#[cfg(unix)]
+fn bind_owner_only(path: &std::path::Path) -> std::io::Result<std::os::unix::net::UnixListener> {
+    const OWNER_ONLY_UMASK: libc::mode_t = 0o077;
+    with_umask(OWNER_ONLY_UMASK, || {
+        std::os::unix::net::UnixListener::bind(path)
+    })
 }
 
 /// Placeholder so callers compile on platforms without Unix domain sockets.
@@ -260,11 +330,64 @@ mod tests {
         }
 
         #[test]
-        fn creates_missing_parent_directories() {
+        fn creates_missing_parent_directories_owner_only() {
             let path = temp_socket("nested").join("e.sock");
             let _socket = bind_unix_socket(&path).unwrap();
             assert!(path.exists());
+            let dir_mode = std::fs::metadata(path.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(dir_mode & 0o777, 0o700);
         }
+
+        #[test]
+        fn binds_owner_only_even_in_a_world_writable_directory() {
+            let dir = temp_socket("shared");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).unwrap();
+            let path = dir.join("f.sock");
+
+            let _socket = bind_unix_socket(&path).unwrap();
+
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+
+        /// Reads the process umask. umask can only be read by setting it, so this holds the
+        /// same lock as `bind_owner_only` and never sees a concurrent bind's temporary mask.
+        fn current_umask() -> libc::mode_t {
+            let _guard = super::super::UMASK_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // SAFETY: umask only swaps the process file-mode creation mask and cannot fail;
+            // the original mask is put straight back.
+            unsafe {
+                let mask = libc::umask(0o077);
+                libc::umask(mask);
+                mask
+            }
+        }
+
+        #[test]
+        fn restores_the_process_umask_after_binding() {
+            let before = current_umask();
+            let _socket = bind_unix_socket(&temp_socket("g.sock")).unwrap();
+            assert_eq!(current_umask(), before);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn flags_parent_directories_other_users_can_write() {
+        use super::shared_directory_reason;
+        assert_eq!(shared_directory_reason(0o700), None);
+        assert_eq!(shared_directory_reason(0o755), None);
+        assert_eq!(shared_directory_reason(0o750), None);
+        assert_eq!(shared_directory_reason(0o775), Some("group-writable"));
+        assert_eq!(shared_directory_reason(0o777), Some("world-writable"));
+        assert_eq!(shared_directory_reason(0o1777), Some("world-writable"));
+        assert_eq!(shared_directory_reason(0o40757), Some("world-writable"));
     }
 
     #[test]
