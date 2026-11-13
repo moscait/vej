@@ -24,6 +24,8 @@ jobs:
             artifact_name: vej-macos-arm64
             archive_format: tar.gz
             binary_name: vej
+            zvej_goos: darwin
+            zvej_goarch: arm64
 
           # macOS Intel (x86_64)
           - name: macOS x86_64 (Intel)
@@ -32,6 +34,8 @@ jobs:
             artifact_name: vej-macos-x86_64
             archive_format: tar.gz
             binary_name: vej
+            zvej_goos: darwin
+            zvej_goarch: amd64
 
           # Linux AMD64 (x86_64)
           - name: Linux x86_64 (AMD64)
@@ -40,6 +44,8 @@ jobs:
             artifact_name: vej-linux-x86_64
             archive_format: tar.gz
             binary_name: vej
+            zvej_goos: linux
+            zvej_goarch: amd64
 
           # Linux ARM64 (aarch64)
           - name: Linux ARM64 (aarch64)
@@ -48,6 +54,8 @@ jobs:
             artifact_name: vej-linux-arm64
             archive_format: tar.gz
             binary_name: vej
+            zvej_goos: linux
+            zvej_goarch: arm64
 
           # Windows AMD64 (x86_64)
           - name: Windows x86_64 (AMD64)
@@ -118,11 +126,33 @@ jobs:
           CMAKE_SYSTEM_PROCESSOR: "ARM64"
         run: cargo build --release --target ${{ matrix.target }}
 
+      # zvej (OpenZiti host for vej) is pure Go; it ships next to vej on macOS and Linux.
+      - name: Setup Go (zvej)
+        if: matrix.zvej_goos != ''
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: zvej/go.mod
+          cache-dependency-path: zvej/go.sum
+
+      - name: Build zvej
+        if: matrix.zvej_goos != ''
+        working-directory: zvej
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.zvej_goos }}
+          GOARCH: ${{ matrix.zvej_goarch }}
+        run: |
+          go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+            -o ../target/${{ matrix.target }}/release/zvej .
+
       - name: Package archive (Unix)
         if: matrix.archive_format == 'tar.gz'
         run: |
           mkdir -p staging
           cp target/${{ matrix.target }}/release/${{ matrix.binary_name }} staging/
+          if [ -f target/${{ matrix.target }}/release/zvej ]; then
+            cp target/${{ matrix.target }}/release/zvej staging/
+          fi
           cp README.md staging/
           if [ -d "playground" ]; then
             cp -r playground staging/

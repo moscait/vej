@@ -61,12 +61,7 @@ pub static RECOMMENDED_MODELS: &[ModelSpec] = &[
         vendor: "Meta",
         country: "USA",
         size_gb: 2.02,
-        aliases: &[
-            "llama-3.2-3b",
-            "llama3.2-3b",
-            "llama-3b",
-            "meta-3b",
-        ],
+        aliases: &["llama-3.2-3b", "llama3.2-3b", "llama-3b", "meta-3b"],
         hf_url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
         filename: "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
         template: TemplateStyle::Llama3,
@@ -77,43 +72,29 @@ pub static RECOMMENDED_MODELS: &[ModelSpec] = &[
         vendor: "Meta",
         country: "USA",
         size_gb: 4.92,
-        aliases: &[
-            "llama-3.1-8b",
-            "llama3.1-8b",
-            "llama-8b",
-            "meta-8b",
-        ],
+        aliases: &["llama-3.1-8b", "llama3.1-8b", "llama-8b", "meta-8b"],
         hf_url: "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
         filename: "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
         template: TemplateStyle::Llama3,
     },
     ModelSpec {
-        id: "gemma-2-2b",
-        name: "Gemma-2-2B-IT",
-        vendor: "Google",
+        id: "granite-4.2-3b",
+        name: "Granite-4.2-3B-Instruct",
+        vendor: "IBM",
         country: "USA",
-        size_gb: 1.63,
-        aliases: &["gemma-2-2b", "gemma2-2b", "gemma-2b", "gemma2", "google-2b"],
-        hf_url: "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf",
-        filename: "gemma-2-2b-it-Q4_K_M.gguf",
-        template: TemplateStyle::Gemma,
-    },
-    ModelSpec {
-        id: "gemma-2-9b",
-        name: "Gemma-2-9B-IT",
-        vendor: "Google",
-        country: "USA",
-        size_gb: 5.44,
+        size_gb: 2.09,
         aliases: &[
-            "gemma-2-9b",
-            "gemma2-9b",
-            "gemma-9b",
-            "gemma2-9b-it",
-            "google-9b",
+            "granite-4.2-3b",
+            "granite-4.2",
+            "granite4.2",
+            "granite4",
+            "granite",
+            "ibm-granite",
+            "ibm-4.2",
         ],
-        hf_url: "https://huggingface.co/bartowski/gemma-2-9b-it-GGUF/resolve/main/gemma-2-9b-it-Q4_K_M.gguf",
-        filename: "gemma-2-9b-it-Q4_K_M.gguf",
-        template: TemplateStyle::Gemma,
+        hf_url: "https://huggingface.co/ibm-granite/granite-4.2-3b-GGUF/resolve/main/granite-4.2-3b-Q4_K_M.gguf",
+        filename: "granite-4.2-3b-Q4_K_M.gguf",
+        template: TemplateStyle::ChatML,
     },
     ModelSpec {
         id: "gemma-4-e2b",
@@ -129,7 +110,7 @@ pub static RECOMMENDED_MODELS: &[ModelSpec] = &[
             "gemma-4-2b",
             "google-4-e2b",
         ],
-        hf_url: "https://huggingface.co/bartowski/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf",
+        hf_url: "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf",
         filename: "gemma-4-E2B-it-Q4_K_M.gguf",
         template: TemplateStyle::Gemma4,
     },
@@ -204,7 +185,10 @@ pub async fn pull_model(query: &str) -> Result<PathBuf> {
 
     let dest_file = dest_dir.join(spec.filename);
     if dest_file.exists() {
-        println!("Model '{}' is already downloaded at {:?}", spec.id, dest_file);
+        println!(
+            "Model '{}' is already downloaded at {:?}",
+            spec.id, dest_file
+        );
         return Ok(dest_file);
     }
 
@@ -243,7 +227,11 @@ pub async fn pull_model(query: &str) -> Result<PathBuf> {
         .with_context(|| format!("Failed to create temporary file {:?}", temp_file))?;
 
     let mut res = res;
-    while let Some(chunk) = res.chunk().await.with_context(|| "Error reading chunk from stream")? {
+    while let Some(chunk) = res
+        .chunk()
+        .await
+        .with_context(|| "Error reading chunk from stream")?
+    {
         file.write_all(&chunk)
             .with_context(|| "Error writing to temporary file")?;
         pb.inc(chunk.len() as u64);

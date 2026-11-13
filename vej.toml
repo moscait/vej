@@ -9,7 +9,7 @@
 #   - "smollm2-1.7b"  (Hugging Face, USA/France) - Top reasoning balance (1.05 GB)
 #   - "gemma-2-2b"    (Google, USA) - Highest decision accuracy (1.63 GB)
 # Or provide a direct path to any custom GGUF file.
-default_model = "llama-3.2-1b"
+default_model = "gemma-4-e2b"
 
 # Daemon network binding
 host = "127.0.0.1"

@@ -20,3 +20,6 @@ repomix-output.xml
 # Playground
 playground/node_modules/
 playground/dist/
+
+# Dart / Flutter
+.dart_tool/
