@@ -115,6 +115,14 @@ pub fn bind_unix_socket(path: &std::path::Path) -> Result<OwnedUnixSocket> {
 pub struct OwnedUnixSocket(std::convert::Infallible);
 
 #[cfg(not(unix))]
+impl OwnedUnixSocket {
+    /// A value of this type can't exist on this platform, so code holding one is unreachable.
+    pub fn unreachable(self) -> ! {
+        match self.0 {}
+    }
+}
+
+#[cfg(not(unix))]
 pub fn bind_unix_socket(_path: &std::path::Path) -> Result<OwnedUnixSocket> {
     anyhow::bail!("--remote-socket needs Unix domain sockets (macOS or Linux)")
 }
