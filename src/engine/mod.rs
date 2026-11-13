@@ -25,7 +25,9 @@ use crate::models::{TemplateStyle, find_model_spec, resolve_model_path};
 use types::ChoiceItem;
 
 pub use limits::MAX_REQUEST_BODY_BYTES;
-pub use types::{BatchDecisionRequest, BatchDecisionResponse, DecisionRequest, UnifiedResponse};
+pub use types::{
+    BatchDecisionRequest, BatchDecisionResponse, DecisionRequest, InvalidRequest, UnifiedResponse,
+};
 #[cfg(test)]
 pub use types::{BatchItemResult, DecisionResponse};
 

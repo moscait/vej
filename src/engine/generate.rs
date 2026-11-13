@@ -38,7 +38,9 @@ impl DecisionEngine {
             .str_to_token(&formatted, add_bos)
             .map_err(|e| anyhow!("Failed to tokenize generation prompt: {:?}", e))?;
         if prompt_tokens.is_empty() {
-            return Err(anyhow!("Generation prompt tokenized to zero tokens"));
+            return Err(anyhow!(super::types::InvalidRequest(
+                "Generation prompt tokenized to zero tokens".to_string()
+            )));
         }
 
         let ctx_cap = limits::generation_context_cap(self.n_ctx, self.model.n_ctx_train()) as usize;

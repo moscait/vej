@@ -13,7 +13,7 @@ use super::prompt::add_bos_for;
 use super::scoring::build_answer_output;
 use super::types::{
     BatchDecisionRequest, BatchDecisionResponse, BatchItemResult, ChoiceItem, DecisionRequest,
-    DecisionResponse, JevResponse, QuestionSpec, UnifiedResponse, UsageInfo,
+    DecisionResponse, InvalidRequest, JevResponse, QuestionSpec, UnifiedResponse, UsageInfo,
 };
 
 struct BatchTask {
@@ -44,7 +44,9 @@ impl DecisionEngine {
         temperature: f32,
     ) -> Result<DecisionResponse> {
         if choices.is_empty() {
-            return Err(anyhow!("Choices list cannot be empty"));
+            return Err(anyhow!(InvalidRequest(
+                "Choices list cannot be empty".to_string()
+            )));
         }
 
         let start_time = Instant::now();
@@ -57,7 +59,9 @@ impl DecisionEngine {
 
         let n_tokens = prompt_tokens.len();
         if n_tokens == 0 {
-            return Err(anyhow!("Prompt tokenized to zero tokens"));
+            return Err(anyhow!(InvalidRequest(
+                "Prompt tokenized to zero tokens".to_string()
+            )));
         }
         limits::check_prompt_tokens(n_tokens, ctx.n_ctx() as usize)?;
 
@@ -97,18 +101,24 @@ impl DecisionEngine {
 
         if let Some(ref questions) = req.questions {
             if questions.is_empty() {
-                return Err(anyhow!("'questions' map cannot be empty"));
+                return Err(anyhow!(InvalidRequest(
+                    "'questions' map cannot be empty".to_string()
+                )));
             }
 
             let mut answers = serde_json::Map::new();
             let mut total_tokens = 0;
 
             for (q_name, q_val) in questions {
-                let q_spec: QuestionSpec = serde_json::from_value(q_val.clone())
-                    .map_err(|e| anyhow!("Failed to parse question '{}': {}", q_name, e))?;
+                let q_spec: QuestionSpec = serde_json::from_value(q_val.clone()).map_err(|e| {
+                    anyhow!(InvalidRequest(format!(
+                        "Failed to parse question '{}': {}",
+                        q_name, e
+                    )))
+                })?;
                 let is_score = q_spec.q_type.eq_ignore_ascii_case("score");
-                let choice_items =
-                    build_choices(&q_spec).map_err(|e| anyhow!("Question '{}' {}", q_name, e))?;
+                let choice_items = build_choices(&q_spec)
+                    .map_err(|e| anyhow!(InvalidRequest(format!("Question '{}' {}", q_name, e))))?;
                 let instr_str = format_instructions(&q_spec);
 
                 let single_res = self.evaluate_single_with_context(
@@ -160,9 +170,10 @@ impl DecisionEngine {
 
             Ok(UnifiedResponse::Flat(res))
         } else {
-            Err(anyhow!(
+            Err(anyhow!(InvalidRequest(
                 "Request must provide either 'questions' (Jev format) or 'choices' (flat format)"
-            ))
+                    .to_string()
+            )))
         }
     }
 
@@ -185,10 +196,10 @@ impl DecisionEngine {
             .str_to_token(prompt, add_bos)
             .map_err(|e| anyhow!("Failed to tokenize prompt for item {}: {:?}", item_idx, e))?;
         if tokens.is_empty() {
-            return Err(anyhow!(
+            return Err(anyhow!(InvalidRequest(format!(
                 "Prompt for item {} tokenized to zero tokens",
                 item_idx
-            ));
+            ))));
         }
         limits::check_prompt_tokens(tokens.len(), token_limit)?;
         Ok(tokens)
@@ -211,19 +222,25 @@ impl DecisionEngine {
 
             if let Some(questions) = item_questions {
                 if questions.is_empty() {
-                    return Err(anyhow!(
+                    return Err(anyhow!(InvalidRequest(format!(
                         "'questions' map cannot be empty for item {}",
                         item_idx
-                    ));
+                    ))));
                 }
                 item_is_jev[item_idx] = true;
 
                 for (q_name, q_val) in questions {
-                    let q_spec: QuestionSpec = serde_json::from_value(q_val.clone())
-                        .map_err(|e| anyhow!("Failed to parse question '{}': {}", q_name, e))?;
+                    let q_spec: QuestionSpec =
+                        serde_json::from_value(q_val.clone()).map_err(|e| {
+                            anyhow!(InvalidRequest(format!(
+                                "Failed to parse question '{}': {}",
+                                q_name, e
+                            )))
+                        })?;
                     let is_score = q_spec.q_type.eq_ignore_ascii_case("score");
-                    let choice_items = build_choices(&q_spec)
-                        .map_err(|e| anyhow!("Question '{}' {}", q_name, e))?;
+                    let choice_items = build_choices(&q_spec).map_err(|e| {
+                        anyhow!(InvalidRequest(format!("Question '{}' {}", q_name, e)))
+                    })?;
                     let instr_str = format_instructions(&q_spec);
                     let prompt =
                         self.format_prompt(instr_str.as_deref(), &state_str, &choice_items);
@@ -265,10 +282,10 @@ impl DecisionEngine {
                     last_token_offset: 0,
                 });
             } else {
-                return Err(anyhow!(
+                return Err(anyhow!(InvalidRequest(format!(
                     "Item {} must provide either 'choices' or 'questions'",
                     item_idx
-                ));
+                ))));
             }
         }
 

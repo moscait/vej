@@ -294,13 +294,98 @@ async fn failed_model_load_returns_an_error_status() {
 #[tokio::test]
 async fn evaluation_errors_return_an_error_status() {
     let (app, _probe) = app();
-    let (status, _) = post_json(
-        &app,
+    let cases = [
+        (
+            "empty choices",
+            "/v1/systemone",
+            json!({ "state": "x", "choices": [] }),
+        ),
+        (
+            "empty questions",
+            "/v1/systemone",
+            json!({ "state": "x", "questions": {} }),
+        ),
+        (
+            "too many levels",
+            "/v1/systemone",
+            json!({ "state": "x", "questions": { "rating": { "type": "score", "levels": 102 } } }),
+        ),
+        (
+            "oversized batch",
+            "/v1/batch",
+            json!({
+                "choices": ["a", "b"],
+                "items": (0..257).map(|i| json!({ "id": format!("i{i}"), "state": "s" })).collect::<Vec<_>>()
+            }),
+        ),
+    ];
+    for (label, path, body) in cases {
+        let (status, _) = post_json(&app, path, body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{label}");
+    }
+}
+
+#[tokio::test]
+async fn in_engine_invalid_request_returns_400_and_internal_error_returns_500() {
+    let invalid_loader = FakeLoader::new()
+        .0
+        .with_eval_invalid_request("input is 9000 tokens; the limit is 8192");
+    let invalid_app = app_with(invalid_loader, 4);
+
+    let (status, body) = post_json(
+        &invalid_app,
         "/v1/systemone",
-        json!({ "state": "x", "choices": [] }),
+        json!({ "state": "x", "choices": ["yes", "no"] }),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body.as_str()
+            .is_some_and(|s| s.contains("input is 9000 tokens; the limit is 8192")),
+        "{body}"
+    );
+
+    let (batch_status, batch_body) = post_json(
+        &invalid_app,
+        "/v1/batch",
+        json!({ "choices": ["yes", "no"], "items": [{ "id": "i0", "state": "x" }] }),
+    )
+    .await;
+    assert_eq!(batch_status, StatusCode::BAD_REQUEST);
+    assert!(
+        batch_body
+            .as_str()
+            .is_some_and(|s| s.contains("input is 9000 tokens; the limit is 8192")),
+        "{batch_body}"
+    );
+
+    let (gen_status, gen_body) =
+        post_json(&invalid_app, "/v1/generate", json!({ "prompt": "hi" })).await;
+    assert_eq!(gen_status, StatusCode::BAD_REQUEST);
+    assert!(
+        gen_body
+            .as_str()
+            .is_some_and(|s| s.contains("input is 9000 tokens; the limit is 8192")),
+        "{gen_body}"
+    );
+
+    let internal_loader = FakeLoader::new()
+        .0
+        .with_eval_internal_error("gpu decode blew up");
+    let internal_app = app_with(internal_loader, 4);
+    let (err_status, err_body) = post_json(
+        &internal_app,
+        "/v1/systemone",
+        json!({ "state": "x", "choices": ["yes", "no"] }),
+    )
+    .await;
+    assert_eq!(err_status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        err_body
+            .as_str()
+            .is_some_and(|s| s.contains("gpu decode blew up")),
+        "{err_body}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

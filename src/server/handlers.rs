@@ -109,7 +109,13 @@ where
     })
     .await
     .map_err(|e| internal(format!("{error_label}: task failed: {e}")))?
-    .map_err(|e| internal(format!("{error_label}: {e}")))
+    .map_err(|e| {
+        if let Some(invalid) = e.downcast_ref::<crate::engine::InvalidRequest>() {
+            (StatusCode::BAD_REQUEST, invalid.0.clone())
+        } else {
+            internal(format!("{error_label}: {e}"))
+        }
+    })
 }
 
 /// Load errors name model files and paths, which remote clients must not see.
