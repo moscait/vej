@@ -1,3 +1,4 @@
+import 'json_reading.dart';
 import 'models.dart';
 
 /// A single item within a [BatchDecisionRequest].
@@ -104,8 +105,8 @@ class BatchItemResult {
   /// Item identifier matching [BatchItem.id].
   final String id;
 
-  /// The evaluated result, either a [JevResult] or a [DecisionResult].
-  final dynamic result;
+  /// The evaluated result: a [JevResult] or a [DecisionResult].
+  final EvaluationResult result;
 
   const BatchItemResult({
     required this.id,
@@ -113,20 +114,23 @@ class BatchItemResult {
   });
 
   /// Convenience getter if [result] is a [JevResult].
-  JevResult? get jevResult => result is JevResult ? result as JevResult : null;
+  JevResult? get jevResult => switch (result) {
+        JevResult r => r,
+        DecisionResult() => null,
+      };
 
   /// Convenience getter if [result] is a [DecisionResult].
-  DecisionResult? get decisionResult =>
-      result is DecisionResult ? result as DecisionResult : null;
+  DecisionResult? get decisionResult => switch (result) {
+        DecisionResult r => r,
+        JevResult() => null,
+      };
 
+  /// Throws [FormatException] when a field has the wrong type.
   factory BatchItemResult.fromJson(Map<String, dynamic> json) {
     final id = json['id']?.toString() ?? '';
-    final dynamic res;
-    if (json.containsKey('answers')) {
-      res = JevResult.fromJson(json);
-    } else {
-      res = DecisionResult.fromJson(json);
-    }
+    final EvaluationResult res = json.containsKey('answers')
+        ? JevResult.fromJson(json)
+        : DecisionResult.fromJson(json);
     return BatchItemResult(id: id, result: res);
   }
 }
@@ -152,17 +156,17 @@ class BatchDecisionResult {
     required this.latencyMs,
   });
 
+  /// Throws [FormatException] when a field has the wrong type.
   factory BatchDecisionResult.fromJson(Map<String, dynamic> json) {
-    final rawResults = json['results'] as List<dynamic>? ?? [];
-    final items = rawResults
-        .map((e) => BatchItemResult.fromJson(e as Map<String, dynamic>))
+    final items = optList(json, 'results')
+        .map((e) => BatchItemResult.fromJson(asObject(e, 'batch result item')))
         .toList();
 
     return BatchDecisionResult(
       model: json['model']?.toString() ?? '',
       results: items,
-      totalTokens: (json['total_tokens'] as num?)?.toInt() ?? 0,
-      latencyMs: (json['latency_ms'] as num?)?.toDouble() ?? 0.0,
+      totalTokens: optInt(json, 'total_tokens') ?? 0,
+      latencyMs: optDouble(json, 'latency_ms') ?? 0.0,
     );
   }
 }

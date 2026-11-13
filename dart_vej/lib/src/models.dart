@@ -1,3 +1,5 @@
+import 'json_reading.dart';
+
 /// Specification of a question for multi-question or schema-driven evaluation.
 class QuestionSpec {
   /// The question primitive type: 'choice', 'noul', or 'score'.
@@ -130,8 +132,14 @@ class DecisionRequest {
   }
 }
 
+/// Result of `POST /v1/systemone`: a flat [DecisionResult] for `choices` requests or a
+/// [JevResult] for `questions` requests. Sealed, so a `switch` over it is exhaustive.
+sealed class EvaluationResult {
+  const EvaluationResult();
+}
+
 /// Result of a flat decision evaluation.
-class DecisionResult {
+class DecisionResult extends EvaluationResult {
   /// The chosen key or label.
   final String decision;
 
@@ -159,17 +167,15 @@ class DecisionResult {
     required this.tokensEvaluated,
   });
 
+  /// Throws [FormatException] when a field has the wrong type.
   factory DecisionResult.fromJson(Map<String, dynamic> json) {
-    final rawProbs = json['probabilities'] as Map<String, dynamic>? ?? {};
-    final probs = rawProbs.map((k, v) => MapEntry(k, (v as num).toDouble()));
-
     return DecisionResult(
       decision: json['decision']?.toString() ?? '',
-      confidence: (json['confidence'] as num?)?.toDouble() ?? 0.0,
-      probabilities: probs,
+      confidence: optDouble(json, 'confidence') ?? 0.0,
+      probabilities: doubleMap(json, 'probabilities'),
       model: json['model']?.toString() ?? '',
-      latencyMs: (json['latency_ms'] as num?)?.toDouble() ?? 0.0,
-      tokensEvaluated: (json['tokens_evaluated'] as num?)?.toInt() ?? 0,
+      latencyMs: optDouble(json, 'latency_ms') ?? 0.0,
+      tokensEvaluated: optInt(json, 'tokens_evaluated') ?? 0,
     );
   }
 
@@ -216,17 +222,15 @@ class AnswerOutput {
     required this.confidence,
   });
 
+  /// Throws [FormatException] when a field has the wrong type.
   factory AnswerOutput.fromJson(Map<String, dynamic> json) {
-    final rawProbs = json['probabilities'] as Map<String, dynamic>? ?? {};
-    final probs = rawProbs.map((k, v) => MapEntry(k, (v as num).toDouble()));
-
     return AnswerOutput(
       type: json['type']?.toString() ?? 'choice',
       choice: json['choice']?.toString(),
-      noul: (json['noul'] as num?)?.toDouble(),
-      score: (json['score'] as num?)?.toDouble(),
-      probabilities: probs,
-      confidence: (json['confidence'] as num?)?.toDouble() ?? 0.0,
+      noul: optDouble(json, 'noul'),
+      score: optDouble(json, 'score'),
+      probabilities: doubleMap(json, 'probabilities'),
+      confidence: optDouble(json, 'confidence') ?? 0.0,
     );
   }
 
@@ -262,8 +266,8 @@ class UsageInfo {
 
   factory UsageInfo.fromJson(Map<String, dynamic> json) {
     return UsageInfo(
-      inputTokens: (json['input_tokens'] as num?)?.toInt() ?? 0,
-      outputTokens: (json['output_tokens'] as num?)?.toInt() ?? 0,
+      inputTokens: optInt(json, 'input_tokens') ?? 0,
+      outputTokens: optInt(json, 'output_tokens') ?? 0,
     );
   }
 
@@ -274,7 +278,7 @@ class UsageInfo {
 }
 
 /// Result of a multi-question evaluation in Jev format.
-class JevResult {
+class JevResult extends EvaluationResult {
   /// Name or ID of the model used.
   final String model;
 
@@ -294,17 +298,17 @@ class JevResult {
     this.latencyMs,
   });
 
+  /// Throws [FormatException] when a field has the wrong type.
   factory JevResult.fromJson(Map<String, dynamic> json) {
-    final rawAnswers = json['answers'] as Map<String, dynamic>? ?? {};
-    final answers = rawAnswers.map(
-      (k, v) => MapEntry(k, AnswerOutput.fromJson(v as Map<String, dynamic>)),
+    final answers = optObject(json, 'answers').map(
+      (k, v) => MapEntry(k, AnswerOutput.fromJson(asObject(v, "answer '$k'"))),
     );
 
     return JevResult(
       model: json['model']?.toString() ?? '',
       answers: answers,
-      usage: UsageInfo.fromJson(json['usage'] as Map<String, dynamic>? ?? {}),
-      latencyMs: (json['latency_ms'] as num?)?.toDouble(),
+      usage: UsageInfo.fromJson(optObject(json, 'usage')),
+      latencyMs: optDouble(json, 'latency_ms'),
     );
   }
 
@@ -338,19 +342,17 @@ class ModelInfo {
     required this.isActive,
   });
 
+  /// Throws [FormatException] when a required field is missing or has the wrong type.
   factory ModelInfo.fromJson(Map<String, dynamic> json) {
     return ModelInfo(
-      id: json['id'] as String,
-      name: json['name'] as String,
-      vendor: json['vendor'] as String,
-      country: json['country'] as String,
-      sizeGb: (json['size_gb'] as num).toDouble(),
-      aliases: (json['aliases'] as List<dynamic>?)
-              ?.map((e) => e.toString())
-              .toList() ??
-          [],
-      isDownloaded: json['is_downloaded'] as bool? ?? false,
-      isActive: json['is_active'] as bool? ?? false,
+      id: reqString(json, 'id'),
+      name: reqString(json, 'name'),
+      vendor: reqString(json, 'vendor'),
+      country: reqString(json, 'country'),
+      sizeGb: reqDouble(json, 'size_gb'),
+      aliases: optList(json, 'aliases').map((e) => e.toString()).toList(),
+      isDownloaded: optBool(json, 'is_downloaded') ?? false,
+      isActive: optBool(json, 'is_active') ?? false,
     );
   }
 }
@@ -369,9 +371,9 @@ class DaemonStatus {
 
   factory DaemonStatus.fromJson(Map<String, dynamic> json) {
     return DaemonStatus(
-      status: json['status'] as String? ?? 'unknown',
-      activeModel: json['active_model'] as String? ?? '',
-      version: json['version'] as String? ?? '',
+      status: optString(json, 'status') ?? 'unknown',
+      activeModel: optString(json, 'active_model') ?? '',
+      version: optString(json, 'version') ?? '',
     );
   }
 }
