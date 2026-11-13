@@ -7,9 +7,7 @@ use llama_cpp_2::token::LlamaToken;
 use std::time::Instant;
 
 use super::DecisionEngine;
-use super::choices::{
-    ChoiceMode, build_choices, build_choices_with_mode, format_instructions, format_state_str,
-};
+use super::choices::{build_choices, format_instructions, format_state_str};
 use super::prompt::add_bos_for;
 use super::scoring::build_answer_output;
 use super::types::{
@@ -212,7 +210,7 @@ impl DecisionEngine {
                     let q_spec: QuestionSpec = serde_json::from_value(q_val.clone())
                         .map_err(|e| anyhow!("Failed to parse question '{}': {}", q_name, e))?;
                     let is_score = q_spec.q_type.eq_ignore_ascii_case("score");
-                    let choice_items = build_choices_with_mode(&q_spec, ChoiceMode::Batch)
+                    let choice_items = build_choices(&q_spec)
                         .map_err(|e| anyhow!("Question '{}' {}", q_name, e))?;
                     let instr_str = format_instructions(&q_spec);
                     let prompt =
