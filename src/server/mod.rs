@@ -142,6 +142,9 @@ where
         .route("/api/tags", get(api_tags_handler::<L>))
         .route("/v1/models", get(list_models_handler::<L>))
         .route("/v1/ps", get(running_models_handler::<L>))
+        .layer(axum::extract::DefaultBodyLimit::max(
+            crate::engine::MAX_REQUEST_BODY_BYTES,
+        ))
 }
 
 /// Routes that change server state, relay to third parties, or serve the playground:

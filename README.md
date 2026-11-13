@@ -98,6 +98,15 @@ cargo install --path .
 ```
 The compiled binary will be located at `./target/release/vej`.
 
+#### Running Tests
+```bash
+# Run the unit and mocked HTTP test suite
+cargo test
+
+# Run opt-in integration tests against a real local GGUF model (or downloaded catalog ID)
+VEJ_TEST_MODEL=/path/to/model.gguf cargo test --test real_model -- --ignored
+```
+
 ---
 
 ### ⚡ Quick Start (Launch Playground)

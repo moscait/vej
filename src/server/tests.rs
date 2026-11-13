@@ -294,13 +294,98 @@ async fn failed_model_load_returns_an_error_status() {
 #[tokio::test]
 async fn evaluation_errors_return_an_error_status() {
     let (app, _probe) = app();
-    let (status, _) = post_json(
-        &app,
+    let cases = [
+        (
+            "empty choices",
+            "/v1/systemone",
+            json!({ "state": "x", "choices": [] }),
+        ),
+        (
+            "empty questions",
+            "/v1/systemone",
+            json!({ "state": "x", "questions": {} }),
+        ),
+        (
+            "too many levels",
+            "/v1/systemone",
+            json!({ "state": "x", "questions": { "rating": { "type": "score", "levels": 102 } } }),
+        ),
+        (
+            "oversized batch",
+            "/v1/batch",
+            json!({
+                "choices": ["a", "b"],
+                "items": (0..257).map(|i| json!({ "id": format!("i{i}"), "state": "s" })).collect::<Vec<_>>()
+            }),
+        ),
+    ];
+    for (label, path, body) in cases {
+        let (status, _) = post_json(&app, path, body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{label}");
+    }
+}
+
+#[tokio::test]
+async fn in_engine_invalid_request_returns_400_and_internal_error_returns_500() {
+    let invalid_loader = FakeLoader::new()
+        .0
+        .with_eval_invalid_request("input is 9000 tokens; the limit is 8192");
+    let invalid_app = app_with(invalid_loader, 4);
+
+    let (status, body) = post_json(
+        &invalid_app,
         "/v1/systemone",
-        json!({ "state": "x", "choices": [] }),
+        json!({ "state": "x", "choices": ["yes", "no"] }),
     )
     .await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body.as_str()
+            .is_some_and(|s| s.contains("input is 9000 tokens; the limit is 8192")),
+        "{body}"
+    );
+
+    let (batch_status, batch_body) = post_json(
+        &invalid_app,
+        "/v1/batch",
+        json!({ "choices": ["yes", "no"], "items": [{ "id": "i0", "state": "x" }] }),
+    )
+    .await;
+    assert_eq!(batch_status, StatusCode::BAD_REQUEST);
+    assert!(
+        batch_body
+            .as_str()
+            .is_some_and(|s| s.contains("input is 9000 tokens; the limit is 8192")),
+        "{batch_body}"
+    );
+
+    let (gen_status, gen_body) =
+        post_json(&invalid_app, "/v1/generate", json!({ "prompt": "hi" })).await;
+    assert_eq!(gen_status, StatusCode::BAD_REQUEST);
+    assert!(
+        gen_body
+            .as_str()
+            .is_some_and(|s| s.contains("input is 9000 tokens; the limit is 8192")),
+        "{gen_body}"
+    );
+
+    let internal_loader = FakeLoader::new()
+        .0
+        .with_eval_internal_error("gpu decode blew up");
+    let internal_app = app_with(internal_loader, 4);
+    let (err_status, err_body) = post_json(
+        &internal_app,
+        "/v1/systemone",
+        json!({ "state": "x", "choices": ["yes", "no"] }),
+    )
+    .await;
+    assert_eq!(err_status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        err_body
+            .as_str()
+            .is_some_and(|s| s.contains("gpu decode blew up")),
+        "{err_body}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -496,6 +581,24 @@ async fn generate_endpoints_return_text_from_the_serving_model() {
         assert_eq!(body["response"], "echo: Summarize John 3:16");
         assert_eq!(body["done"], true);
         assert_eq!(probe.loads(), ["model-a"]);
+
+        let (sys_status, sys_body) = post_json(
+            &app,
+            path,
+            json!({
+                "prompt": "Summarize John 3:16",
+                "system": "You are a concise Bible assistant.",
+                "model": "gemma-4-e2b"
+            }),
+        )
+        .await;
+        assert_eq!(sys_status, StatusCode::OK, "{path}: {sys_body}");
+        assert_eq!(sys_body["model"], "gemma-4-e2b");
+        assert_eq!(
+            sys_body["response"],
+            "echo [You are a concise Bible assistant.]: Summarize John 3:16"
+        );
+        assert_eq!(probe.loads(), ["model-a", "gemma-4-e2b"]);
     }
 }
 
@@ -577,6 +680,105 @@ async fn access_guard_rejects_cross_site_and_rebinding_requests() {
     .await;
     assert_eq!(status, StatusCode::OK, "same-origin playground request");
     assert!(probe.events().is_empty());
+}
+
+#[tokio::test]
+async fn validation_rejects_oversized_or_malformed_requests_without_loading_model() {
+    let (app, probe) = app();
+
+    let too_many_choices: Vec<String> = (0..27).map(|i| format!("c{i}")).collect();
+    let (status, _) = post_json(
+        &app,
+        "/v1/systemone",
+        json!({ "state": "x", "choices": too_many_choices }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "27 choices");
+
+    let (status, _) = post_json(
+        &app,
+        "/v1/systemone",
+        json!({
+            "state": "x",
+            "questions": { "rating": { "type": "score", "levels": 102 } }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "102 levels");
+
+    let mut too_many_questions = serde_json::Map::new();
+    for i in 0..33 {
+        too_many_questions.insert(format!("q{i}"), json!({ "type": "noul" }));
+    }
+    let (status, _) = post_json(
+        &app,
+        "/v1/systemone",
+        json!({ "state": "x", "questions": too_many_questions }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "33 questions");
+
+    let too_many_items: Vec<Value> = (0..257)
+        .map(|i| json!({ "id": format!("item-{i}"), "state": "s" }))
+        .collect();
+    let (status, _) = post_json(
+        &app,
+        "/v1/batch",
+        json!({ "choices": ["a", "b"], "items": too_many_items }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "257 batch items");
+
+    let mut q32 = serde_json::Map::new();
+    for i in 0..32 {
+        q32.insert(format!("q{i}"), json!({ "type": "noul" }));
+    }
+    let items_33: Vec<Value> = (0..33)
+        .map(|i| json!({ "id": format!("item-{i}"), "state": "s" }))
+        .collect();
+    let (status, _) = post_json(
+        &app,
+        "/v1/batch",
+        json!({ "questions": q32, "items": items_33 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "33 * 32 = 1056 > 1024");
+
+    let huge_state = "x".repeat(crate::engine::MAX_REQUEST_BODY_BYTES + 128);
+    let oversized_body = serde_json::to_vec(&json!({
+        "state": huge_state,
+        "choices": ["a", "b"],
+    }))
+    .unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/systemone")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(oversized_body))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::PAYLOAD_TOO_LARGE,
+        ">2 MiB request body must be rejected before loading"
+    );
+
+    assert!(
+        probe.loads().is_empty(),
+        "invalid shapes must be rejected before loading a model, got: {:?}",
+        probe.loads()
+    );
+
+    let max_choices: Vec<String> = (0..26)
+        .map(|i| char::from(b'A' + i as u8).to_string())
+        .collect();
+    let (status, _) = post_json(
+        &app,
+        "/v1/systemone",
+        json!({ "state": "x", "choices": max_choices }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "26 choices A..Z must succeed");
 }
 
 #[tokio::test]

@@ -50,10 +50,19 @@ impl Probe {
     }
 }
 
+#[derive(Clone, Default)]
+enum FakeEvalOutcome {
+    #[default]
+    Ok,
+    Invalid(String),
+    Internal(String),
+}
+
 pub struct FakeModel {
     id: String,
     eval_delay: Duration,
     probe: Probe,
+    eval_outcome: FakeEvalOutcome,
 }
 
 impl Drop for FakeModel {
@@ -71,6 +80,14 @@ impl FakeModel {
             .fetch_max(now_active, Ordering::SeqCst);
         std::thread::sleep(self.eval_delay);
         self.probe.active.fetch_sub(1, Ordering::SeqCst);
+
+        match &self.eval_outcome {
+            FakeEvalOutcome::Ok => {}
+            FakeEvalOutcome::Invalid(msg) => {
+                return Err(anyhow!(crate::engine::InvalidRequest(msg.clone())));
+            }
+            FakeEvalOutcome::Internal(msg) => return Err(anyhow!("{msg}")),
+        }
 
         let decision = choices
             .and_then(|c| c.first())
@@ -112,8 +129,22 @@ impl DecisionModel for FakeModel {
         })
     }
 
-    fn generate_text(&self, prompt: &str, _max_tokens: usize) -> Result<String> {
-        Ok(format!("echo: {prompt}"))
+    fn generate_text(
+        &self,
+        prompt: &str,
+        system: Option<&str>,
+        _max_tokens: usize,
+    ) -> Result<String> {
+        match &self.eval_outcome {
+            FakeEvalOutcome::Ok => match system.map(str::trim).filter(|s| !s.is_empty()) {
+                Some(sys) => Ok(format!("echo [{sys}]: {prompt}")),
+                None => Ok(format!("echo: {prompt}")),
+            },
+            FakeEvalOutcome::Invalid(msg) => {
+                Err(anyhow!(crate::engine::InvalidRequest(msg.clone())))
+            }
+            FakeEvalOutcome::Internal(msg) => Err(anyhow!("{msg}")),
+        }
     }
 }
 
@@ -123,6 +154,7 @@ pub struct FakeLoader {
     load_delay: Duration,
     eval_delay: Duration,
     failures_remaining: AtomicUsize,
+    eval_outcome: FakeEvalOutcome,
 }
 
 impl FakeLoader {
@@ -144,6 +176,16 @@ impl FakeLoader {
 
     pub fn failing_first(self, attempts: usize) -> Self {
         self.failures_remaining.store(attempts, Ordering::SeqCst);
+        self
+    }
+
+    pub fn with_eval_invalid_request(mut self, msg: impl Into<String>) -> Self {
+        self.eval_outcome = FakeEvalOutcome::Invalid(msg.into());
+        self
+    }
+
+    pub fn with_eval_internal_error(mut self, msg: impl Into<String>) -> Self {
+        self.eval_outcome = FakeEvalOutcome::Internal(msg.into());
         self
     }
 }
@@ -173,6 +215,7 @@ impl ModelLoader for FakeLoader {
             id: model_id.to_string(),
             eval_delay: self.eval_delay,
             probe: self.probe.clone(),
+            eval_outcome: self.eval_outcome.clone(),
         })
     }
 }
