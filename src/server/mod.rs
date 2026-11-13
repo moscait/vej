@@ -354,7 +354,7 @@ async fn serve_remote_socket(
     _stop: tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
     match socket {
-        Some(never) => match never.0 {},
+        Some(socket) => socket.unreachable(),
         None => Ok(()),
     }
 }
