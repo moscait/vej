@@ -569,7 +569,8 @@ request.
   `latency_ms`. Record the numbers in the commit message. If the gain is under 10 ms, don't
   merge; report the numbers instead.
 
-**Done** on branch `perf/p11-context-reuse` (commit `6026eb4`, worktree `../vej-p11`).
+**Done** on branch `perf/p11-context-reuse` (commit `6026eb4`, worktree `../vej-p11`), merged into
+`main` in `00de006`.
 Split immutable state into `EngineCore` so worker threads in `src/engine/pool.rs` (`ContextPool`)
 hold `Arc<EngineCore>` without reference cycles back to `DecisionEngine`; dropping
 `DecisionEngine` shuts down the queue and joins all workers before releasing `Arc<LlamaModel>`.
