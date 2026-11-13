@@ -1,9 +1,42 @@
 import { PRESETS } from './presets.js';
+import { escapeHtml as esc, modelOptionsFrom } from './html.js';
+
+const API_KEY_STORAGE_KEY = 'typesafe_api_key';
+
+/** Storage access can throw (private windows, blocked site data); never let it break the UI. */
+function storageGet(storage, key) {
+  try {
+    return storage.getItem(key);
+  } catch (_) {
+    return null;
+  }
+}
+
+function storageSet(storage, key, value) {
+  try {
+    storage.setItem(key, value);
+  } catch (_) {
+    // Persistence is a convenience only.
+  }
+}
+
+function storageRemove(storage, key) {
+  try {
+    storage.removeItem(key);
+  } catch (_) {
+    // Nothing to clean up if storage is unavailable.
+  }
+}
 
 class VejPlayground {
   constructor() {
-    this.target = localStorage.getItem('vej_target') || 'vej';
-    this.apiKey = localStorage.getItem('typesafe_api_key') || '';
+    this.target = storageGet(localStorage, 'vej_target') || 'vej';
+    // The TypeSafe API key lives in memory. It is persisted only when the user opts in, and
+    // then only in sessionStorage (this tab). Older versions kept it in localStorage, readable
+    // by anything later served from the same origin, so remove that copy.
+    storageRemove(localStorage, API_KEY_STORAGE_KEY);
+    this.apiKey = storageGet(sessionStorage, API_KEY_STORAGE_KEY) || '';
+    this.vejModelOptions = modelOptionsFrom(null);
     this.activePresetId = 'support-triage';
     this.leftTab = 'builder';
     this.rightTab = 'verdict';
@@ -23,6 +56,7 @@ class VejPlayground {
     this.loadPreset(this.activePresetId);
     this.bindEvents();
     this.checkDaemonHealth();
+    this.loadModelCatalog();
   }
 
   initElements() {
@@ -30,6 +64,7 @@ class VejPlayground {
     this.modelSelect = document.getElementById('model-select');
     this.apiKeyGroup = document.getElementById('api-key-group');
     this.apiKeyInput = document.getElementById('api-key-input');
+    this.rememberKeyCheckbox = document.getElementById('remember-key-checkbox');
     this.daemonStatus = document.getElementById('daemon-status');
     this.presetSelect = document.getElementById('preset-select');
     this.presetDesc = document.getElementById('preset-desc');
@@ -59,7 +94,11 @@ class VejPlayground {
     // Set saved target & key
     this.targetSelect.value = this.target;
     this.apiKeyInput.value = this.apiKey;
-    const savedModel = localStorage.getItem('vej_model');
+    if (this.rememberKeyCheckbox) {
+      this.rememberKeyCheckbox.checked = this.apiKey !== '';
+    }
+    this.updateModelOptions();
+    const savedModel = storageGet(localStorage, 'vej_model');
     if (savedModel && Array.from(this.modelSelect.options).some(o => o.value === savedModel)) {
       this.model = savedModel;
       this.modelSelect.value = savedModel;
@@ -71,11 +110,48 @@ class VejPlayground {
   renderPresets() {
     if (!this.presetSelect) return;
     this.presetSelect.innerHTML = PRESETS.map(p => `
-      <option value="${p.id}" ${p.id === this.activePresetId ? 'selected' : ''}>
-        ${p.icon} ${p.name}
+      <option value="${esc(p.id)}" ${p.id === this.activePresetId ? 'selected' : ''}>
+        ${esc(p.icon)} ${esc(p.name)}
       </option>
     `).join('');
     this.updatePresetDescription();
+  }
+
+  /** Replaces the model <select> options. Built with DOM nodes, so names are never parsed as HTML. */
+  renderModelSelect(options) {
+    const fragment = document.createDocumentFragment();
+    for (const opt of options) {
+      const el = document.createElement('option');
+      el.value = opt.value;
+      el.textContent = opt.label;
+      el.disabled = opt.disabled;
+      fragment.appendChild(el);
+    }
+    this.modelSelect.replaceChildren(fragment);
+  }
+
+  /** Fills the vej model list from GET /v1/models, keeping the catalog fallback when offline. */
+  async loadModelCatalog() {
+    try {
+      const url = window.location.protocol === 'file:' ? 'http://127.0.0.1:8080/v1/models' : '/v1/models';
+      const res = await fetch(url, { signal: AbortSignal.timeout(1500) });
+      if (!res.ok) return;
+      const options = modelOptionsFrom(await res.json());
+      if (options.length === 0) return;
+      this.vejModelOptions = options;
+    } catch (_) {
+      return; // Daemon offline: the catalog fallback stays in place.
+    }
+    if (this.target === 'jev') return;
+
+    const hasSaved = storageGet(localStorage, 'vej_model') !== null;
+    const active = this.vejModelOptions.find(o => o.active);
+    if (!hasSaved && active) {
+      this.model = active.value;
+    }
+    this.updateModelOptions();
+    this.syncToRawJson();
+    this.renderCodeExport();
   }
 
   updatePresetDescription() {
@@ -98,7 +174,7 @@ class VejPlayground {
         this.model = 'jev-latest';
       }
     } else {
-      const active = this.modelSelect?.value || this.model || localStorage.getItem('vej_model');
+      const active = this.modelSelect?.value || this.model || storageGet(localStorage, 'vej_model');
       if (active && !active.startsWith('jev')) {
         this.model = active;
       } else {
@@ -149,24 +225,27 @@ class VejPlayground {
     // Target change
     this.targetSelect.addEventListener('change', (e) => {
       this.target = e.target.value;
-      localStorage.setItem('vej_target', this.target);
+      storageSet(localStorage, 'vej_target', this.target);
       this.updateTargetVisibility();
       this.updateModelOptions();
       this.renderCodeExport();
     });
 
-    // API Key input
+    // API Key input: kept in memory; saved to sessionStorage only when "remember" is checked.
     this.apiKeyInput.addEventListener('input', (e) => {
       this.apiKey = e.target.value;
-      localStorage.setItem('typesafe_api_key', this.apiKey);
-      this.renderCodeExport();
+      this.persistApiKey();
     });
+
+    if (this.rememberKeyCheckbox) {
+      this.rememberKeyCheckbox.addEventListener('change', () => this.persistApiKey());
+    }
 
     // Model change
     this.modelSelect.addEventListener('change', (e) => {
       this.model = e.target.value;
       if (!this.model.startsWith('jev')) {
-        localStorage.setItem('vej_model', this.model);
+        storageSet(localStorage, 'vej_model', this.model);
       }
       this.syncToRawJson();
       this.renderCodeExport();
@@ -355,6 +434,15 @@ class VejPlayground {
     });
   }
 
+  persistApiKey() {
+    const remember = this.rememberKeyCheckbox?.checked === true;
+    if (remember && this.apiKey) {
+      storageSet(sessionStorage, API_KEY_STORAGE_KEY, this.apiKey);
+    } else {
+      storageRemove(sessionStorage, API_KEY_STORAGE_KEY);
+    }
+  }
+
   updateTargetVisibility() {
     if (this.target === 'jev' || this.target === 'dual') {
       this.apiKeyGroup.style.display = 'flex';
@@ -365,25 +453,19 @@ class VejPlayground {
 
   updateModelOptions() {
     if (this.target === 'jev') {
-      this.modelSelect.innerHTML = `
-        <option value="jev-latest">jev-latest</option>
-        <option value="jev-1.13.0">jev-1.13.0</option>
-      `;
+      this.renderModelSelect([
+        { value: 'jev-latest', label: 'jev-latest', disabled: false },
+        { value: 'jev-1.13.0', label: 'jev-1.13.0', disabled: false },
+      ]);
     } else {
-      this.modelSelect.innerHTML = `
-        <option value="llama-3.2-1b">llama-3.2-1b (Fastest • ~10ms)</option>
-        <option value="llama-3.2-3b">llama-3.2-3b (High Accuracy • ~25ms)</option>
-        <option value="llama-3.1-8b">llama-3.1-8b (Frontier Quality • ~60ms)</option>
-        <option value="smollm2-1.7b">smollm2-1.7b (Balanced • ~15ms)</option>
-        <option value="gemma-2-2b">gemma-2-2b (Google • ~25ms)</option>
-        <option value="gemma-2-9b">gemma-2-9b (Google 9B • ~70ms)</option>
-        <option value="gemma-4-e2b">gemma-4-e2b (Google Gemma 4 • ~25ms)</option>
-      `;
+      this.renderModelSelect(this.vejModelOptions);
     }
-    if (this.model && Array.from(this.modelSelect.options).some(o => o.value === this.model)) {
+    const selectable = Array.from(this.modelSelect.options).filter(o => !o.disabled);
+    if (this.model && selectable.some(o => o.value === this.model)) {
       this.modelSelect.value = this.model;
-    } else {
-      this.model = this.modelSelect.value;
+    } else if (selectable.length > 0) {
+      this.model = selectable[0].value;
+      this.modelSelect.value = this.model;
     }
   }
 
@@ -514,9 +596,9 @@ class VejPlayground {
       }
 
       return `
-        <div class="question-card" data-qname="${qName}">
+        <div class="question-card" data-qname="${esc(qName)}">
           <div class="question-card-header">
-            <input class="q-input" style="max-width: 140px; font-weight: 700;" value="${qName}" placeholder="Question Name" data-action="rename-q" />
+            <input class="q-input" style="max-width: 140px; font-weight: 700;" value="${esc(qName)}" placeholder="Question Name" data-action="rename-q" />
             <select class="control-select q-input" style="max-width: 110px;" data-action="change-type">
               <option value="choice" ${isChoice ? 'selected' : ''}>Choice</option>
               <option value="noul" ${isNoul ? 'selected' : ''}>Noul (Yes/No)</option>
@@ -527,7 +609,7 @@ class VejPlayground {
 
           <div class="field-group">
             <label class="field-label">Instructions / Question</label>
-            <input class="q-input" value="${instrDisplay.replace(/"/g, '&quot;')}" placeholder="e.g. Which team should handle this ticket?" data-action="update-instr" />
+            <input class="q-input" value="${esc(instrDisplay)}" placeholder="e.g. Which team should handle this ticket?" data-action="update-instr" />
           </div>
 
           <div class="field-group">
@@ -538,9 +620,9 @@ class VejPlayground {
             
             <div class="criteria-list">
               ${criteriaEntries.map(([k, v]) => `
-                <div class="criteria-row" data-key="${k}">
-                  <input class="q-input" value="${k}" ${isNoul ? 'readonly' : ''} placeholder="Key (e.g. billing or 0)" data-crit="key" />
-                  <input class="q-input" value="${String(v).replace(/"/g, '&quot;')}" placeholder="Description / criteria rule..." data-crit="val" />
+                <div class="criteria-row" data-key="${esc(k)}">
+                  <input class="q-input" value="${esc(k)}" ${isNoul ? 'readonly' : ''} placeholder="Key (e.g. billing or 0)" data-crit="key" />
+                  <input class="q-input" value="${esc(v)}" placeholder="Description / criteria rule..." data-crit="val" />
                   ${!isNoul ? `<button class="remove-btn" data-action="delete-crit-row">&times;</button>` : '<div></div>'}
                 </div>
               `).join('')}
@@ -759,7 +841,7 @@ class VejPlayground {
       if (res.ok) {
         const data = await res.json();
         this.daemonStatus.className = 'status-indicator';
-        this.daemonStatus.innerHTML = `<span class="status-dot"></span> vej daemon active (${data.active_model})`;
+        this.daemonStatus.innerHTML = `<span class="status-dot"></span> vej daemon active (${esc(data.active_model)})`;
       } else {
         throw new Error('Non-200');
       }
@@ -903,7 +985,7 @@ class VejPlayground {
             <span class="code-lang">Response JSON</span>
             <button class="copy-btn" id="copy-json-btn">Copy</button>
           </div>
-          <pre class="code-content">${JSON.stringify(displayData, null, 2)}</pre>
+          <pre class="code-content">${esc(JSON.stringify(displayData, null, 2))}</pre>
         </div>
       `;
       document.getElementById('copy-json-btn').addEventListener('click', () => {
@@ -1044,7 +1126,7 @@ class VejPlayground {
   renderQuestionHeader(qName, qSpec) {
     const qType = (qSpec?.type || 'choice').toUpperCase();
     const crit = qSpec?.criteria || qSpec?.options || qSpec?.choices || qSpec?.levels;
-    let typeBadge = `<span class="badge" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; font-weight: 600;">${qType}</span>`;
+    let typeBadge = `<span class="badge" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; font-weight: 600;">${esc(qType)}</span>`;
     
     if (qType === 'SCORE') {
       const levels = Array.isArray(crit) ? crit.length : (typeof crit === 'object' && crit !== null ? Object.keys(crit).length : 6);
@@ -1066,8 +1148,8 @@ class VejPlayground {
     return `
       <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.5rem; margin-top: 1.25rem; border-top: 1px solid var(--border-color); padding-top: 1rem;">
         <div style="max-width: 80%;">
-          <div style="font-weight: 700; font-size: 0.95rem; color: #f8fafc; font-family: monospace;">${qName}</div>
-          ${promptText ? `<div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 3px; line-height: 1.4;">${promptText}</div>` : ''}
+          <div style="font-weight: 700; font-size: 0.95rem; color: #f8fafc; font-family: monospace;">${esc(qName)}</div>
+          ${promptText ? `<div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 3px; line-height: 1.4;">${esc(promptText)}</div>` : ''}
         </div>
         ${typeBadge}
       </div>
@@ -1079,7 +1161,7 @@ class VejPlayground {
       this.resultsContainer.innerHTML = `
         <div class="verdict-hero" style="border-color: rgba(244, 63, 94, 0.4); background: rgba(244, 63, 94, 0.08);">
           <div class="verdict-badge" style="color: #fb7185;">Evaluation Error</div>
-          <p style="font-size: 0.85rem; color: #fecdd3;">${res.error}</p>
+          <p style="font-size: 0.85rem; color: #fecdd3;">${esc(res.error)}</p>
         </div>
       `;
       return;
@@ -1093,20 +1175,20 @@ class VejPlayground {
       <div class="verdict-hero">
         <div class="verdict-header">
           <div>
-            <div style="font-size: 0.72rem; text-transform: uppercase; color: var(--text-muted); font-weight: 700;">${label} Evaluation</div>
+            <div style="font-size: 0.72rem; text-transform: uppercase; color: var(--text-muted); font-weight: 700;">${esc(label)} Evaluation</div>
             <div class="verdict-badge">${qNames.length} Question${qNames.length > 1 ? 's' : ''} Evaluated</div>
           </div>
           <div style="text-align: right;">
             <div style="font-size: 0.72rem; text-transform: uppercase; color: var(--text-muted); font-weight: 700;">Engine</div>
-            <div class="confidence-meter">${data?.model || 'llama-3.2-1b'}</div>
+            <div class="confidence-meter">${esc(data?.model || 'unknown')}</div>
           </div>
         </div>
 
         <div class="pills-container">
-          <span class="metric-pill">⏱️ Latency: ${(data?.latency_ms || latency_ms || 0).toFixed(1)} ms</span>
-          <span class="metric-pill">📥 Input Tokens: ${data?.usage?.input_tokens ?? data?.tokens_evaluated ?? 'N/A'}</span>
-          <span class="metric-pill">⚡ Output Tokens: ${data?.usage?.output_tokens ?? 0}</span>
-          <span class="metric-pill">🤖 Model: ${data?.model || 'unknown'}</span>
+          <span class="metric-pill">⏱️ Latency: ${(Number(data?.latency_ms || latency_ms) || 0).toFixed(1)} ms</span>
+          <span class="metric-pill">📥 Input Tokens: ${esc(data?.usage?.input_tokens ?? data?.tokens_evaluated ?? 'N/A')}</span>
+          <span class="metric-pill">⚡ Output Tokens: ${esc(data?.usage?.output_tokens ?? 0)}</span>
+          <span class="metric-pill">🤖 Model: ${esc(data?.model || 'unknown')}</span>
         </div>
       </div>
     `;
@@ -1125,8 +1207,8 @@ class VejPlayground {
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
               <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">Verdict</div>
-              <div style="font-size: 1.25rem; font-weight: 800; color: #f8fafc;">${answer.choice || 'N/A'}</div>
-              ${scoreSub ? `<div style="font-size: 0.78rem; font-weight: 600; color: #93c5fd; margin-top: 2px;">${scoreSub}</div>` : ''}
+              <div style="font-size: 1.25rem; font-weight: 800; color: #f8fafc;">${esc(answer.choice || 'N/A')}</div>
+              ${scoreSub ? `<div style="font-size: 0.78rem; font-weight: 600; color: #93c5fd; margin-top: 2px;">${esc(scoreSub)}</div>` : ''}
             </div>
             <div style="text-align: right;">
               <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">Confidence</div>
@@ -1139,7 +1221,7 @@ class VejPlayground {
               return `
                 <div class="prob-row">
                   <div class="prob-meta" style="font-size: 0.75rem;">
-                    <span>${idx === 0 ? '🏆 ' : ''}${optLabel}</span>
+                    <span>${idx === 0 ? '🏆 ' : ''}${esc(optLabel)}</span>
                     <span>${(p * 100).toFixed(1)}%</span>
                   </div>
                   <div class="prob-bar-track" style="height: 6px;">
@@ -1207,13 +1289,13 @@ class VejPlayground {
       <div style="display: flex; gap: 0.75rem; margin-bottom: 0.75rem;">
         <div style="flex: 1; padding: 0.6rem 0.8rem; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.75rem;">
           <div style="font-weight: 700; color: #60a5fa; margin-bottom: 0.2rem;">⚡ Local vej</div>
-          <div style="color: var(--text-muted);">Latency: <b>${vej.latency_ms ? vej.latency_ms.toFixed(1) + ' ms' : 'ERR'}</b> | Input: <b>${vej.data?.usage?.input_tokens ?? vej.data?.tokens_evaluated ?? 0}</b> | Output: <b>0 tok (pure softmax)</b></div>
-          ${vej.error ? `<div style="color: #fb7185; margin-top: 4px;">${vej.error}</div>` : ''}
+          <div style="color: var(--text-muted);">Latency: <b>${vej.latency_ms ? vej.latency_ms.toFixed(1) + ' ms' : 'ERR'}</b> | Input: <b>${esc(vej.data?.usage?.input_tokens ?? vej.data?.tokens_evaluated ?? 0)}</b> | Output: <b>0 tok (pure softmax)</b></div>
+          ${vej.error ? `<div style="color: #fb7185; margin-top: 4px;">${esc(vej.error)}</div>` : ''}
         </div>
         <div style="flex: 1; padding: 0.6rem 0.8rem; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.75rem;">
           <div style="font-weight: 700; color: #a855f7; margin-bottom: 0.2rem;">☁️ Hosted Jev</div>
-          <div style="color: var(--text-muted);">Latency: <b>${jev.latency_ms ? jev.latency_ms.toFixed(1) + ' ms' : (jev.error ? 'FAILED' : 'ERR')}</b> | Input: <b>${jev.data?.usage?.input_tokens ?? 0}</b> | Output: <b>${jev.data?.usage?.output_tokens ?? 0} tok</b></div>
-          ${jev.error ? `<div style="color: #fb7185; margin-top: 4px;">${jev.error}</div>` : ''}
+          <div style="color: var(--text-muted);">Latency: <b>${jev.latency_ms ? jev.latency_ms.toFixed(1) + ' ms' : (jev.error ? 'FAILED' : 'ERR')}</b> | Input: <b>${esc(jev.data?.usage?.input_tokens ?? 0)}</b> | Output: <b>${esc(jev.data?.usage?.output_tokens ?? 0)} tok</b></div>
+          ${jev.error ? `<div style="color: #fb7185; margin-top: 4px;">${esc(jev.error)}</div>` : ''}
         </div>
       </div>
     `;
@@ -1237,8 +1319,8 @@ class VejPlayground {
             </div>
             <div>
               <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">Verdict</div>
-              <div style="font-size: 1.25rem; font-weight: 800; color: #f8fafc;">${vejAns?.choice || (vej.error ? 'ERR' : 'N/A')}</div>
-              ${vejScoreSub ? `<div style="font-size: 0.78rem; font-weight: 600; color: #93c5fd; margin-top: 2px;">${vejScoreSub}</div>` : ''}
+              <div style="font-size: 1.25rem; font-weight: 800; color: #f8fafc;">${esc(vejAns?.choice || (vej.error ? 'ERR' : 'N/A'))}</div>
+              ${vejScoreSub ? `<div style="font-size: 0.78rem; font-weight: 600; color: #93c5fd; margin-top: 2px;">${esc(vejScoreSub)}</div>` : ''}
             </div>
             <div class="dist-card" style="padding: 0.5rem; background: var(--bg-surface);">
               ${Object.entries(vejAns?.probabilities || {}).sort((a,b)=>b[1]-a[1]).map(([k, p], idx) => {
@@ -1246,7 +1328,7 @@ class VejPlayground {
                 return `
                   <div class="prob-row">
                     <div class="prob-meta" style="font-size: 0.75rem;">
-                      <span>${idx === 0 ? '🏆 ' : ''}${optLabel}</span>
+                      <span>${idx === 0 ? '🏆 ' : ''}${esc(optLabel)}</span>
                       <span>${(p * 100).toFixed(1)}%</span>
                     </div>
                     <div class="prob-bar-track" style="height: 6px;">
@@ -1266,8 +1348,8 @@ class VejPlayground {
             </div>
             <div>
               <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">Verdict</div>
-              <div style="font-size: 1.25rem; font-weight: 800; color: ${jev.error ? '#fb7185' : '#f8fafc'};">${jevAns?.choice || (jev.error ? 'Error' : 'N/A')}</div>
-              ${jevScoreSub ? `<div style="font-size: 0.78rem; font-weight: 600; color: #d8b4fe; margin-top: 2px;">${jevScoreSub}</div>` : ''}
+              <div style="font-size: 1.25rem; font-weight: 800; color: ${jev.error ? '#fb7185' : '#f8fafc'};">${esc(jevAns?.choice || (jev.error ? 'Error' : 'N/A'))}</div>
+              ${jevScoreSub ? `<div style="font-size: 0.78rem; font-weight: 600; color: #d8b4fe; margin-top: 2px;">${esc(jevScoreSub)}</div>` : ''}
             </div>
             ${!jev.error ? `
             <div class="dist-card" style="padding: 0.5rem; background: var(--bg-surface);">
@@ -1276,7 +1358,7 @@ class VejPlayground {
                 return `
                   <div class="prob-row">
                     <div class="prob-meta" style="font-size: 0.75rem;">
-                      <span>${idx === 0 ? '🏆 ' : ''}${optLabel}</span>
+                      <span>${idx === 0 ? '🏆 ' : ''}${esc(optLabel)}</span>
                       <span>${(p * 100).toFixed(1)}%</span>
                     </div>
                     <div class="prob-bar-track" style="height: 6px;">
@@ -1299,7 +1381,7 @@ class VejPlayground {
     const payloadJson = JSON.stringify(payload, null, 2);
     const host = this.target === 'jev' ? 'https://api.typesafe.ai' : 'http://127.0.0.1:8080';
     const authHeader = this.target === 'jev' 
-      ? `-H "Authorization: Bearer ${this.apiKey || '$TYPESAFE_API_KEY'}" \\\n  ` 
+      ? `-H "Authorization: Bearer $TYPESAFE_API_KEY" \\\n  `
       : '';
 
     let code = '';
@@ -1309,12 +1391,12 @@ class VejPlayground {
   ${authHeader}-H "Content-Type: application/json" \\
   -d '${payloadJson}'`;
     } else if (this.codeLang === 'python') {
-      code = `import requests
+      code = `${this.target === 'jev' ? 'import os\n' : ''}import requests
 
 url = "${host}/v1/systemone"
 headers = {
     "Content-Type": "application/json",
-    ${this.target === 'jev' ? `"Authorization": "Bearer ${this.apiKey || 'YOUR_API_KEY'}"` : ''}
+    ${this.target === 'jev' ? `"Authorization": f"Bearer {os.environ['TYPESAFE_API_KEY']}"` : ''}
 }
 payload = ${JSON.stringify(payload, null, 4)}
 
@@ -1325,7 +1407,7 @@ print(response.json())`;
   method: "POST",
   headers: {
     "Content-Type": "application/json",
-    ${this.target === 'jev' ? `"Authorization": "Bearer ${this.apiKey || 'YOUR_API_KEY'}"` : ''}
+    ${this.target === 'jev' ? '"Authorization": `Bearer ${process.env.TYPESAFE_API_KEY}`' : ''}
   },
   body: JSON.stringify(${payloadJson})
 });
@@ -1340,7 +1422,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::new();
     let res = client.post("${host}/v1/systemone")
         .header("Content-Type", "application/json")
-        ${this.target === 'jev' ? `.header("Authorization", "Bearer ${this.apiKey || "YOUR_KEY"}")` : ''}
+        ${this.target === 'jev' ? '.header("Authorization", format!("Bearer {}", std::env::var("TYPESAFE_API_KEY")?))' : ''}
         .body(r#"${payloadJson}"#)
         .send()
         .await?

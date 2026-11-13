@@ -31,21 +31,24 @@
       <!-- Model Selector -->
       <div class="control-group">
         <span class="control-label">Model:</span>
+        <!-- Filled from GET /v1/models by app.js; these catalog ids are the offline fallback. -->
         <select id="model-select" class="control-select">
-          <option value="llama-3.2-1b">llama-3.2-1b (Fastest • ~10ms)</option>
-          <option value="llama-3.2-3b">llama-3.2-3b (High Accuracy • ~25ms)</option>
-          <option value="llama-3.1-8b">llama-3.1-8b (Frontier Quality • ~60ms)</option>
-          <option value="smollm2-1.7b">smollm2-1.7b (Balanced • ~15ms)</option>
-          <option value="gemma-2-2b">gemma-2-2b (Google • ~25ms)</option>
-          <option value="gemma-2-9b">gemma-2-9b (Google 9B • ~70ms)</option>
-          <option value="gemma-4-e2b">gemma-4-e2b (Google Gemma 4 • ~25ms)</option>
+          <option value="llama-3.2-1b">llama-3.2-1b</option>
+          <option value="smollm2-1.7b">smollm2-1.7b</option>
+          <option value="llama-3.2-3b">llama-3.2-3b</option>
+          <option value="llama-3.1-8b">llama-3.1-8b</option>
+          <option value="granite-4.2-3b">granite-4.2-3b</option>
+          <option value="gemma-4-e2b">gemma-4-e2b</option>
         </select>
       </div>
 
-      <!-- API Key Field (Visible for Jev / Dual) -->
+      <!-- API Key Field (Visible for Jev / Dual). Kept in memory unless "Remember" is checked. -->
       <div id="api-key-group" class="control-group" style="display: none;">
         <span class="control-label">Key:</span>
-        <input id="api-key-input" type="password" class="control-input" placeholder="TYPESAFE_API_KEY" style="width: 140px;" />
+        <input id="api-key-input" type="password" class="control-input" placeholder="TYPESAFE_API_KEY" autocomplete="off" style="width: 140px;" />
+        <label class="control-label" title="Keep the key for this browser tab only (sessionStorage)" style="display: inline-flex; align-items: center; gap: 4px; cursor: pointer;">
+          <input id="remember-key-checkbox" type="checkbox" /> Remember (this tab)
+        </label>
       </div>
 
       <!-- Connection Status Indicator -->
@@ -213,7 +216,7 @@
   <div id="toast" class="toast">Action completed</div>
 
   <!-- App Script -->
-  <script type="module" src="./src/app.js?v=11"></script>
+  <script type="module" src="./src/app.js?v=12"></script>
 
   <script>
     // Tab switching for right panel
