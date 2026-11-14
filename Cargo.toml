@@ -26,7 +26,7 @@ tower-http = { version = "0.6", features = ["cors", "fs"] }
 rust-embed = { version = "8.11", features = ["mime-guess", "include-exclude"] }
 listenfd = "1"
 plist = "1.9"
-sha2 = "0.10"
+sha2 = "0.11"
 hex = "0.4"
 getrandom = "0.3"
 tower = { version = "0.5", features = ["util"] }
