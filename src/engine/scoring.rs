@@ -1,6 +1,6 @@
 //! Logit scoring and probability normalization for candidate choices.
 
-use llama_cpp_2::model::{AddBos, LlamaModel};
+use llama_cpp_2::model::LlamaModel;
 use std::collections::{HashMap, HashSet};
 
 use super::limits::LETTER_LABELS;
@@ -25,9 +25,8 @@ pub(crate) trait PieceTokenizer {
 
 impl PieceTokenizer for LlamaModel {
     fn tokenize_piece(&self, piece: &str) -> Option<Vec<i32>> {
-        self.str_to_token(piece, AddBos::Never)
-            .ok()
-            .map(|tokens| tokens.into_iter().map(|t| t.0).collect())
+        let tokens = self.vocab().tokenize(piece.as_bytes(), false, true);
+        Some(tokens.into_iter().map(|t| t.0).collect())
     }
 }
 

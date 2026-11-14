@@ -91,7 +91,10 @@ config system that no longer depends on the working directory.
   playground, latency claims name the hardware, and catalog sizes reflect the pinned files
   (granite-4.2-3b is 2.24 GB and gemma-4-e2b is 3.11 GB).
 - **Dependencies:** `rustls`, `rustls-webpki`, `rustix`, `tokio` and `yoke-derive`
-  advisories; zvej builds with Go 1.26.11 for standard-library security fixes.
+  advisories; zvej builds with Go 1.26.11 for standard-library security fixes. Dependabot
+  bumps: llama-cpp-2 0.1.161 (the engine now tokenizes through the new vocab API),
+  reqwest 0.13, sha2 0.11, toml 1.2, getrandom 0.4, the GitHub Actions used by CI and
+  release, the Java SDK's Jackson, JUnit and Maven plugins, and the playground's Vite 8.
 
 ### Performance
 

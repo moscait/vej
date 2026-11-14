@@ -207,8 +207,8 @@ impl DecisionEngine {
         self.core.neutralize_user_text(text)
     }
 
-    /// Returns true if `text` tokenizes (with `AddBos::Never`) into any control or
-    /// user-defined special token.
+    /// Returns true if `text` tokenizes (without a BOS token, special parsing on) into any
+    /// control or user-defined special token.
     pub fn contains_special_tokens(&self, text: &str) -> Result<bool> {
         self.core.contains_special_tokens(text)
     }
@@ -241,12 +241,10 @@ impl EngineCore {
     }
 
     pub(crate) fn contains_special_tokens(&self, text: &str) -> Result<bool> {
-        let tokens = self
-            .model
-            .str_to_token(text, llama_cpp_2::model::AddBos::Never)
-            .map_err(|e| anyhow!("Failed to tokenize probe text: {e:?}"))?;
+        let vocab = self.model.vocab();
+        let tokens = vocab.tokenize(text.as_bytes(), false, true);
         Ok(tokens.into_iter().any(|tok| {
-            self.model.token_attr(tok).intersects(
+            vocab.attr(tok).intersects(
                 llama_cpp_2::token_type::LlamaTokenAttr::Control
                     | llama_cpp_2::token_type::LlamaTokenAttr::UserDefined,
             )

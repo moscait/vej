@@ -2,7 +2,7 @@
 
 use aho_corasick::AhoCorasick;
 use anyhow::{Context, Result};
-use llama_cpp_2::model::{AddBos, LlamaModel};
+use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::token_type::LlamaTokenAttr;
 
 use crate::models::{TemplateStyle, find_model_spec};
@@ -49,14 +49,15 @@ impl SpecialTokenGuard {
 }
 
 pub(crate) fn collect_special_tokens(model: &LlamaModel) -> Vec<String> {
+    let vocab = model.vocab();
     let mut specials: Vec<String> = model
         .tokens(true)
         .filter_map(|(token, piece)| {
-            let attrs = model.token_attr(token);
+            let attrs = vocab.attr(token);
             if !attrs.intersects(LlamaTokenAttr::Control | LlamaTokenAttr::UserDefined) {
                 return None;
             }
-            let text = piece.ok()?;
+            let text = String::from_utf8(piece).ok()?;
             if text.chars().count() >= 2 && !text.contains('\u{200B}') {
                 Some(text)
             } else {
@@ -125,10 +126,12 @@ pub(crate) fn resolve_template(
     })
 }
 
-pub(crate) fn add_bos_for(template: TemplateStyle) -> AddBos {
+/// Whether the tokenizer should prepend the model's BOS token (`add_special` in
+/// `llama_tokenize`). Templates that spell out their own start token must not get a second.
+pub(crate) fn add_bos_for(template: TemplateStyle) -> bool {
     match template {
-        TemplateStyle::Llama3 | TemplateStyle::ChatML | TemplateStyle::Gemma4 => AddBos::Never,
-        TemplateStyle::Gemma => AddBos::Always,
+        TemplateStyle::Llama3 | TemplateStyle::ChatML | TemplateStyle::Gemma4 => false,
+        TemplateStyle::Gemma => true,
     }
 }
 

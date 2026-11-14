@@ -1,7 +1,6 @@
 //! Text generation via greedy token decoding.
 
 use anyhow::{Result, anyhow};
-use llama_cpp_2::TokenToStringError;
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::token::LlamaToken;
@@ -23,24 +22,6 @@ impl DecisionEngine {
 }
 
 impl EngineCore {
-    /// Raw bytes for a generated token, retrying with the exact buffer size llama.cpp
-    /// asks for (non-deprecated equivalent of `token_to_bytes(token, Special::Plaintext)`).
-    fn token_piece_bytes(&self, token: LlamaToken) -> Option<Vec<u8>> {
-        const INITIAL_PIECE_BUFFER: usize = 8;
-        match self
-            .model
-            .token_to_piece_bytes(token, INITIAL_PIECE_BUFFER, false, None)
-        {
-            Err(TokenToStringError::InsufficientBufferSpace(needed)) => {
-                let size = usize::try_from(needed.unsigned_abs()).ok()?;
-                self.model
-                    .token_to_piece_bytes(token, size, false, None)
-                    .ok()
-            }
-            other => other.ok(),
-        }
-    }
-
     pub fn generate_text(
         &self,
         user_prompt: &str,
@@ -50,11 +31,8 @@ impl EngineCore {
         let clean_prompt = self.neutralize_user_text(user_prompt);
         let clean_system = system.map(|s| self.neutralize_user_text(s));
         let formatted = self.format_generation_prompt(clean_system.as_deref(), &clean_prompt);
-        let add_bos = add_bos_for(self.template);
-        let prompt_tokens = self
-            .model
-            .str_to_token(&formatted, add_bos)
-            .map_err(|e| anyhow!("Failed to tokenize generation prompt: {:?}", e))?;
+        let vocab = self.model.vocab();
+        let prompt_tokens = vocab.tokenize(formatted.as_bytes(), add_bos_for(self.template), true);
         if prompt_tokens.is_empty() {
             return Err(anyhow!(super::types::InvalidRequest(
                 "Generation prompt tokenized to zero tokens".to_string()
@@ -99,12 +77,11 @@ impl EngineCore {
                 }
             }
             let next_token = LlamaToken::new(best_idx as i32);
-            if self.model.is_eog_token(next_token) {
+            if vocab.is_eog(next_token) {
                 break;
             }
-            if let Some(bytes) = self.token_piece_bytes(next_token) {
-                output_bytes.extend_from_slice(&bytes);
-            }
+            // Plain text only: special tokens are not rendered into the output.
+            output_bytes.extend_from_slice(&vocab.token_to_piece(next_token, false, None));
             if cur_pos >= ctx_size as i32 {
                 break;
             }

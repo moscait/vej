@@ -70,11 +70,10 @@ impl EngineCore {
             &clean_choices,
             plan.scheme,
         );
-        let add_bos = add_bos_for(self.template);
-        let prompt_tokens = self
-            .model
-            .str_to_token(&prompt, add_bos)
-            .map_err(|e| anyhow!("Failed to tokenize prompt: {:?}", e))?;
+        let prompt_tokens =
+            self.model
+                .vocab()
+                .tokenize(prompt.as_bytes(), add_bos_for(self.template), true);
 
         let n_tokens = prompt_tokens.len();
         if n_tokens == 0 {
@@ -217,11 +216,10 @@ impl EngineCore {
         prompt: &str,
         token_limit: usize,
     ) -> Result<Vec<LlamaToken>> {
-        let add_bos = add_bos_for(self.template);
-        let tokens = self
-            .model
-            .str_to_token(prompt, add_bos)
-            .map_err(|e| anyhow!("Failed to tokenize prompt for item {}: {:?}", item_idx, e))?;
+        let tokens =
+            self.model
+                .vocab()
+                .tokenize(prompt.as_bytes(), add_bos_for(self.template), true);
         if tokens.is_empty() {
             return Err(anyhow!(InvalidRequest(format!(
                 "Prompt for item {} tokenized to zero tokens",

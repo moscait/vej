@@ -30,9 +30,11 @@ branch; a dependency counts as met only once it is merged.
 `AtomicUsize::fetch_update`, which failed the clippy job on every branch), P4 (`ae5f05a`) and
 P5 (`bc51417`). Merged branches and their worktrees have been removed. Nothing is pushed.
 Release follow-ups: bump `Cargo.toml` to 0.2.0 and list P5's breaking changes and P2's
-default-generation-prompt change in the release notes. The Dependabot bump of llama-cpp-2 to
-0.1.161 does not compile (the tokenizer API moved off `LlamaModel`); treat it as a migration
-package rather than merging the PR as is.
+default-generation-prompt change in the release notes. The Dependabot PRs (#4–#19) were merged on
+GitHub; the llama-cpp-2 0.1.161 bump moved tokenization to `LlamaModel::vocab()`
+(`tokenize`, `token_to_piece`, `attr`, `is_eog`, all infallible), so the engine was migrated in
+the merge commit that brought origin/main back into main. Decision output is unchanged
+(same `decision`/`confidence` as the P11 measurement) and the real-model tests pass.
 
 **Parallel waves.** Wave 1: P1, P2, P4, P6, P7, P8, P9, P10 (they touch different files).
 Wave 2: P3 (after P2 step 1), then P5 (after P2, P3 and P7). Wave 3: P11. Packages that touch
