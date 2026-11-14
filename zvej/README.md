@@ -14,7 +14,7 @@ Requests through zvej arrive on vej's **remote API** (see [Remote Access](../REA
 
 - **Allowed:** decisions, batch, generation, `/health`, `/v1/models`, `/v1/ps`, `/api/tags`.
 - **Not available:** model switching, unloading, shutdown, the TypeSafe proxy and the playground. These return 404.
-- **Ignored:** per-request `keep_alive` and `model`, unless enabled under `[remote]` in `vej.toml`.
+- **Ignored:** per-request `keep_alive` and `model`, unless enabled under `[remote]` in vej's config file.
 - **Identity:** OpenZiti authenticates every caller. zvej logs each request with the caller's identity name:
   ```
   level=INFO msg="Ziti request" caller=laptop method=POST path=/v1/systemone status=200 elapsed_ms=212

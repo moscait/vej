@@ -12,6 +12,10 @@ use crate::keep_alive::KeepAlive;
     about = "High-performance, local System-1 AI decision engine competing with Jev"
 )]
 pub struct Cli {
+    /// Configuration file (default: $VEJ_CONFIG, then <user config dir>/vej/config.toml)
+    #[arg(long, global = true, value_name = "PATH")]
+    pub config: Option<PathBuf>,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -319,13 +323,16 @@ pub struct ConfigArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum ConfigCommands {
-    /// Initialize a default vej.toml in the current directory
+    /// Write a default config file to the user config path (or --config / --path)
     Init {
         /// Overwrite if existing
         #[arg(short, long)]
         force: bool,
+        /// Write the file here instead of the user config path
+        #[arg(long, value_name = "PATH")]
+        path: Option<PathBuf>,
     },
-    /// Print current config path
+    /// Print the resolved config path and which rule chose it
     Path,
 }
 
@@ -334,6 +341,7 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::keep_alive::KeepAlive;
+    use std::path::Path;
     use std::time::Duration;
 
     fn serve_args(argv: &[&str]) -> ServeArgs {
@@ -561,5 +569,29 @@ mod tests {
     #[test]
     fn serve_rejects_malformed_keep_alive() {
         assert!(Cli::try_parse_from(["vej", "serve", "--keep-alive", "soon"]).is_err());
+    }
+
+    #[test]
+    fn config_flag_is_global_and_optional() {
+        let before = Cli::try_parse_from(["vej", "--config", "x.toml", "serve"]).unwrap();
+        assert_eq!(before.config.as_deref(), Some(Path::new("x.toml")));
+        let after =
+            Cli::try_parse_from(["vej", "service", "install", "--config", "y.toml"]).unwrap();
+        assert_eq!(after.config.as_deref(), Some(Path::new("y.toml")));
+        assert_eq!(Cli::try_parse_from(["vej", "serve"]).unwrap().config, None);
+    }
+
+    #[test]
+    fn config_init_accepts_a_target_path() {
+        let cli = Cli::try_parse_from(["vej", "config", "init", "--path", "out.toml", "--force"])
+            .unwrap();
+        let Commands::Config(ConfigArgs {
+            command: ConfigCommands::Init { force, path },
+        }) = cli.command
+        else {
+            panic!("expected config init");
+        };
+        assert!(force);
+        assert_eq!(path.as_deref(), Some(Path::new("out.toml")));
     }
 }

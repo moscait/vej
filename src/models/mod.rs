@@ -4,7 +4,7 @@ pub use download::pull_model;
 
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// A catalog model. Downloads are pinned to one Hugging Face commit (`revision`) and verified
 /// against `sha256`, so a change to the upstream repository can never swap the bytes vej loads.
@@ -42,6 +42,28 @@ pub enum TemplateStyle {
     ChatML,
     Gemma,
     Gemma4,
+}
+
+impl TemplateStyle {
+    /// Names accepted by [`std::str::FromStr`] (case-insensitive) and used in config files.
+    pub const NAMES: [&'static str; 4] = ["Llama3", "ChatML", "Gemma", "Gemma4"];
+}
+
+impl std::str::FromStr for TemplateStyle {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "llama3" => Ok(Self::Llama3),
+            "chatml" => Ok(Self::ChatML),
+            "gemma" => Ok(Self::Gemma),
+            "gemma4" => Ok(Self::Gemma4),
+            other => Err(anyhow!(
+                "unknown template '{other}'; expected one of {}",
+                Self::NAMES.join(", ")
+            )),
+        }
+    }
 }
 
 // Revisions and hashes come from the Hugging Face API:
@@ -167,37 +189,6 @@ pub fn find_model_spec(query: &str) -> Option<&'static ModelSpec> {
             || m.name.eq_ignore_ascii_case(&q)
             || m.aliases.iter().any(|a| a.eq_ignore_ascii_case(&q))
     })
-}
-
-pub fn resolve_model_path(query: &str) -> Result<PathBuf> {
-    let p = Path::new(query);
-    if p.exists() {
-        return Ok(p.to_path_buf());
-    }
-
-    if let Some(spec) = find_model_spec(query) {
-        let cached = get_cache_dir().join(spec.filename);
-        if cached.exists() {
-            return Ok(cached);
-        }
-        return Err(anyhow!(
-            "Model '{}' ({}) is recognized but not yet downloaded.\nRun `vej models pull {}` to download it to {:?}",
-            spec.id,
-            spec.name,
-            spec.id,
-            cached
-        ));
-    }
-
-    Err(anyhow!(
-        "Model '{}' was not found as a local file or in known presets.\nAvailable presets: {}",
-        query,
-        RECOMMENDED_MODELS
-            .iter()
-            .map(|m| m.id)
-            .collect::<Vec<_>>()
-            .join(", ")
-    ))
 }
 
 #[cfg(test)]

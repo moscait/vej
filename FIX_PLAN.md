@@ -17,7 +17,7 @@ branch; a dependency counts as met only once it is merged.
 | P2  | Engine: shared parsing, input limits, errors     | High     | —          | done   | `fix/p2-engine-refactor`  | `5d4ba8c`                      |
 | P3  | Model manager: safe loads                        | Medium   | P2 step 1  | done   | `fix/p3-model-manager`    | `9b1112a`                      |
 | P4  | Model download integrity                         | Medium   | —          | done   | `fix/p4-download-integrity` |                              |
-| P5  | Config: `--config`, model overrides, errors      | Medium   | P2, P3, P7 | todo   |                           |                                |
+| P5  | Config: `--config`, model overrides, errors      | Medium   | P2, P3, P7 | done   | `fix/p5-config`           |                                |
 | P6  | CI on pull requests; release workflow hardening  | Medium   | —          | done   | `ci/p6-pr-ci`             | `5eebe34`                      |
 | P7  | Documentation drift                              | Low      | —          | done   | `fix/p7-docs-drift`       | `840c23b`                      |
 | P8  | Playground: escaping, model list, API key        | Low      | —          | done   | `fix/p8-playground`       | `31cdc74`                      |
@@ -344,28 +344,28 @@ edits `vej.toml`, `README.md` and `src/cli.rs`.
 The maintainer has decided both questions below. This is a breaking change for vej 0.2.0:
 list it under "Breaking changes" in the commit message and the release notes.
 
-- [ ] **1. Stop reading `./vej.toml` from the current directory.** `get_config_path` checks the
+- [x] **1. Stop reading `./vej.toml` from the current directory.** `get_config_path` checks the
    current directory before the user config dir. Results then depend on where vej is started,
    and running vej inside an untrusted checkout adopts that checkout's host, token and model
    settings. Nothing that deploys vej relies on it: launchd and systemd start vej in `/`,
    zvej passes flags, and wordstudy passes flags plus `VEJ_CACHE_DIR`.
-   - [ ] Add a global `--config <PATH>` flag on `Cli` (`#[arg(long, global = true)]`).
-   - [ ] New precedence: `--config` > `VEJ_CONFIG` > `<user config dir>/vej/config.toml`. Never
+   - [x] Add a global `--config <PATH>` flag on `Cli` (`#[arg(long, global = true)]`).
+   - [x] New precedence: `--config` > `VEJ_CONFIG` > `<user config dir>/vej/config.toml`. Never
      the current directory.
-   - [ ] Make the resolution pure and unit-testable, e.g.
+   - [x] Make the resolution pure and unit-testable, e.g.
      `resolve_config_path(explicit, env_var, user_config_dir) -> PathBuf`, and test each level
      of precedence.
-   - [ ] When no explicit config was given and `./vej.toml` exists, warn once: "found ./vej.toml
+   - [x] When no explicit config was given and `./vej.toml` exists, warn once: "found ./vej.toml
      but it is no longer read; use --config ./vej.toml".
-   - [ ] An explicit `--config` or `VEJ_CONFIG` file that doesn't exist is an error. A missing
+   - [x] An explicit `--config` or `VEJ_CONFIG` file that doesn't exist is an error. A missing
      default user config still falls back to defaults, as today.
-   - [ ] `vej config init` writes to the user config path by default, with `--path <PATH>` to
+   - [x] `vej config init` writes to the user config path by default, with `--path <PATH>` to
      choose another location (keep `--force`). `vej config path` prints the resolved path and
      says which rule chose it.
-   - [ ] `vej service install --config <PATH>` appends `--config <absolute path>` to the service's
+   - [x] `vej service install --config <PATH>` appends `--config <absolute path>` to the service's
      `serve` arguments (in `serve_args` in `src/service/spec.rs`), so it shows up in
      `vej service status`. Keep the existing `VEJ_CONFIG` passthrough.
-   - [ ] `git mv vej.toml vej.example.toml`, and update README and LOGIC.md to show
+   - [x] `git mv vej.toml vej.example.toml`, and update README and LOGIC.md to show
      `vej config init` and `--config` instead of a `vej.toml` in the working directory.
    - **Downstream (wordstudy): done** (wordstudy `main`, `d0a77a3`). wordstudy starts vej
      with `VEJ_CONFIG` pointing at a wordstudy-owned, comment-only file it creates
@@ -373,32 +373,46 @@ list it under "Breaking changes" in the commit message and the release notes.
      personal vej config. It uses `VEJ_CONFIG` rather than `--config` because vej 0.1.1
      rejects unknown flags. Keep `VEJ_CONFIG` honored, and keep an existing comment-only file
      parsing as all defaults.
-- [ ] **2. Implement the `[models.<id>]` overrides.** `path` and `template` are parsed into
+- [x] **2. Implement the `[models.<id>]` overrides.** `path` and `template` are parsed into
    `Config::models` but never read. They are the only way to give a custom GGUF the right chat
    template: today `-m /path/x.gguf` guesses the template from the filename, so a Mistral or
    Phi file silently gets ChatML. They also let a catalog id point at a different
    quantization.
-   - [ ] Add a `ModelResolver`, built from `Config::models` and the config file's directory, that
+   - [x] Add a `ModelResolver`, built from `Config::models` and the config file's directory, that
      maps a query (catalog id, alias, custom name or file path) to
      `(PathBuf, Option<TemplateStyle>)`.
-   - [ ] Override keys are canonicalized with `find_model_spec`, so aliases work. Keys that aren't
+   - [x] Override keys are canonicalized with `find_model_spec`, so aliases work. Keys that aren't
      in the catalog define new names, and those entries must have a `path`.
-   - [ ] Resolve a relative `path` against the config file's directory, not the current directory.
-   - [ ] `template` alone (no `path`) is allowed for catalog models. Add `FromStr` for
+   - [x] Resolve a relative `path` against the config file's directory, not the current directory.
+   - [x] `template` alone (no `path`) is allowed for catalog models. Add `FromStr` for
      `TemplateStyle` (Llama3, ChatML, Gemma, Gemma4, case-insensitive). An unknown template
      fails when the config loads.
-   - [ ] A missing `path` file fails when that model is resolved. `serve` resolves its startup
+   - [x] A missing `path` file fails when that model is resolved. `serve` resolves its startup
      model before loading, so a bad override for that model still stops startup.
-   - [ ] Use the resolver everywhere `resolve_model_path` is called today: `handle_serve`,
+   - [x] Use the resolver everywhere `resolve_model_path` is called today: `handle_serve`,
      `handle_decide`, `EngineLoader` (load, and P3's `check`), and `service install`.
-   - [ ] New names are usable locally (`-m <name>`, `POST /v1/models/switch`). Remote requests can
+   - [x] New names are usable locally (`-m <name>`, `POST /v1/models/switch`). Remote requests can
      still only select catalog models (`catalog_model` in handlers); keep that, and add a test
      that a remote request naming a custom override is ignored.
-   - [ ] Document the section in `vej.example.toml` and the README, with one catalog-override
+   - [x] Document the section in `vej.example.toml` and the README, with one catalog-override
      example and one custom-model example.
-- [ ] **3. A config parse error silently falls back to defaults** (`main.rs`,
+- [x] **3. A config parse error silently falls back to defaults** (`main.rs`,
    `load_config().unwrap_or_else`). Make it fatal for `serve`, `decide` and `service install`.
    Other commands may keep the warning.
+
+**Done** on branch `fix/p5-config` (commit `b16d917`), not merged. New `src/model_resolver.rs`
+(`ModelResolver`, `ResolvedModel`); `models::resolve_model_path` is gone. Found along the way:
+TOML splits unquoted dotted headers, so the old example's `[models.llama-3.2-1b]` configured a
+model called `llama-3`. Ids with dots must be quoted (`[models."llama-3.2-1b"]`); the loader
+reports the unquoted form with that hint, and ignores empty nested tables so configs copied
+from the old example still load. `ModelConfig.path` is now a `PathBuf` and `template` a
+`TemplateStyle` (parsed case-insensitively at load). README and `vej.example.toml` sizes use
+the pinned file sizes from P4. The opt-in real-model tests use
+`ModelResolver::catalog_only()`. Verified: fmt, clippy, 192 Rust tests, the 3 real-model tests
+with llama-3.2-1b, Go, Dart, Java, plus a manual run of `decide` with a relative-path
+override, a custom name and a broken override. `Cargo.toml` still says 0.1.1: bump to 0.2.0
+and list the breaking changes in the release notes when releasing. Merge note: P4's branch
+also edits this file (its row and the P6 note), so expect a trivial conflict in the table.
 
 ---
 

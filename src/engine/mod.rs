@@ -17,12 +17,13 @@ use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::model::params::LlamaModelParams;
 use std::collections::HashMap;
 use std::num::NonZeroU32;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use crate::model_manager::ModelLoader;
-use crate::models::{TemplateStyle, find_model_spec, resolve_model_path};
+use crate::model_resolver::{ModelResolver, ResolvedModel};
+use crate::models::TemplateStyle;
 use types::ChoiceItem;
 
 pub use limits::MAX_REQUEST_BODY_BYTES;
@@ -53,8 +54,9 @@ pub fn llama_backend() -> Result<&'static LlamaBackend> {
         .map_err(|e| anyhow!("Failed to initialize llama backend: {e}"))
 }
 
-/// Loads GGUF models from the catalog cache or a local path.
+/// Loads GGUF models from the catalog cache, a `[models.<name>]` override, or a local path.
 pub struct EngineLoader {
+    pub resolver: ModelResolver,
     pub n_gpu_layers: u32,
     pub threads: u32,
     pub n_ctx: u32,
@@ -62,13 +64,18 @@ pub struct EngineLoader {
 }
 
 impl EngineLoader {
-    fn resolve_existing_file(model_id: &str) -> Result<PathBuf> {
-        let path = resolve_model_path(model_id)
+    fn resolve_existing_file(&self, model_id: &str) -> Result<ResolvedModel> {
+        let resolved = self
+            .resolver
+            .resolve(model_id)
             .with_context(|| format!("Could not resolve model '{model_id}'"))?;
-        if !path.is_file() {
-            return Err(anyhow!("Model path '{}' is not a file", path.display()));
+        if !resolved.path.is_file() {
+            return Err(anyhow!(
+                "Model path '{}' is not a file",
+                resolved.path.display()
+            ));
         }
-        Ok(path)
+        Ok(resolved)
     }
 }
 
@@ -76,22 +83,19 @@ impl ModelLoader for EngineLoader {
     type Model = DecisionEngine;
 
     fn canonical_id(&self, query: &str) -> String {
-        find_model_spec(query)
-            .map(|spec| spec.id.to_string())
-            .unwrap_or_else(|| query.to_string())
+        self.resolver.canonical_id(query)
     }
 
     fn check(&self, model_id: &str) -> Result<()> {
-        Self::resolve_existing_file(model_id).map(|_| ())
+        self.resolve_existing_file(model_id).map(|_| ())
     }
 
     fn load(&self, model_id: &str) -> Result<DecisionEngine> {
-        let path = Self::resolve_existing_file(model_id)?;
-        let template = find_model_spec(model_id).map(|spec| spec.template);
+        let resolved = self.resolve_existing_file(model_id)?;
         DecisionEngine::load_with_concurrency(
-            &path,
+            &resolved.path,
             model_id.to_string(),
-            template,
+            resolved.template,
             self.n_gpu_layers,
             self.threads,
             self.n_ctx,
@@ -347,6 +351,18 @@ impl EngineCore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn test_loader() -> EngineLoader {
+        EngineLoader {
+            resolver: ModelResolver::from_config(&crate::config::Config::default())
+                .expect("default config has no overrides"),
+            n_gpu_layers: 0,
+            threads: 1,
+            n_ctx: 512,
+            max_concurrent: 1,
+        }
+    }
 
     #[test]
     fn llama_backend_is_initialized_once_and_shared() {
@@ -359,12 +375,7 @@ mod tests {
 
     #[test]
     fn engine_loader_canonicalizes_catalog_aliases_and_passes_paths_through() {
-        let loader = EngineLoader {
-            n_gpu_layers: 0,
-            threads: 1,
-            n_ctx: 512,
-            max_concurrent: 1,
-        };
+        let loader = test_loader();
         assert_eq!(loader.canonical_id("LLAMA-3.2-1B"), "llama-3.2-1b");
         assert_eq!(
             loader.canonical_id("/models/custom.gguf"),
@@ -374,12 +385,7 @@ mod tests {
 
     #[test]
     fn engine_loader_reports_missing_models_without_loading() {
-        let loader = EngineLoader {
-            n_gpu_layers: 0,
-            threads: 1,
-            n_ctx: 512,
-            max_concurrent: 1,
-        };
+        let loader = test_loader();
         let err = loader
             .load("/nonexistent/model.gguf")
             .err()
@@ -396,12 +402,7 @@ mod tests {
             }
         }
 
-        let loader = EngineLoader {
-            n_gpu_layers: 0,
-            threads: 1,
-            n_ctx: 512,
-            max_concurrent: 1,
-        };
+        let loader = test_loader();
         assert!(loader.check("/nonexistent/model.gguf").is_err());
 
         let dir = std::env::temp_dir();

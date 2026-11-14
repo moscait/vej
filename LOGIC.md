@@ -89,14 +89,14 @@ The entry point [`src/main.rs`](src/main.rs) initializes logging, parses CLI arg
 flowchart TD
     Start(["Process Start (`main.rs`)"]) --> InitTracing["Initialize tracing_subscriber logger"]
     InitTracing --> ParseCLI["Parse CLI args with clap::Parser"]
-    ParseCLI --> LoadConfig["Load Configuration:\n1. $VEJ_CONFIG env\n2. ./vej.toml\n3. ~/.config/vej/config.toml\n4. Config::default()"]
+    ParseCLI --> LoadConfig["Load Configuration (never ./vej.toml):\n1. --config PATH\n2. $VEJ_CONFIG env\n3. ~/.config/vej/config.toml\n4. Config::default()\nParse errors are fatal for serve / decide / service install"]
     
     LoadConfig --> SubcmdBranch{"Subcommand"}
 
     SubcmdBranch -->|"serve"| HandleServe["handle_serve(args, config)\n1. Resolve model path / query\n2. Load DecisionEngine\n3. Start Axum HTTP daemon on host:port"]
     SubcmdBranch -->|"decide"| HandleDecide["handle_decide(args, config)\n1. Read state (arg / stdin)\n2. Load DecisionEngine\n3. Execute evaluate_unified\n4. Format output (pretty terminal / JSON)"]
     SubcmdBranch -->|"models"| HandleModels["handle_models(args)\n- list: print catalog & cache status\n- pull: stream download GGUF from Hugging Face"]
-    SubcmdBranch -->|"config"| HandleConfig["handle_config(args)\n- init: write default vej.toml\n- path: print active config path"]
+    SubcmdBranch -->|"config"| HandleConfig["handle_config(args, source)\n- init: write defaults to the user config path (or --path)\n- path: print the resolved path and the rule that chose it"]
 ```
 
 ### Pseudocode: Main Flow & Configuration Discovery
@@ -105,15 +105,18 @@ flowchart TD
 FUNCTION main():
     initialize_logger()
     cli = Cli::parse_arguments()
-    config = load_config_with_fallback()
+    source = resolve_config_path(cli.config, $VEJ_CONFIG, user_config_dir)
+    config = load_config(source)        # fatal for serve/decide/service install
+    resolver = ModelResolver(config)    # catalog + [models.<name>] overrides
 
     MATCH cli.command:
         CASE Serve(args):
             model_query = args.model OR config.default_model
-            model_path = resolve_model_path(model_query)
+            (model_path, template) = resolver.resolve(model_query)
             engine = DecisionEngine::load(
                 model_path,
                 model_id=model_query,
+                template,
                 gpu_layers=args.gpu_layers OR config.n_gpu_layers,
                 threads=args.threads OR config.threads,
                 ctx_size=config.n_ctx
@@ -123,8 +126,8 @@ FUNCTION main():
         CASE Decide(args):
             state_text = read_state_from_args_or_stdin(args)
             model_query = args.model OR config.default_model
-            model_path = resolve_model_path(model_query)
-            engine = DecisionEngine::load(model_path, ...)
+            (model_path, template) = resolver.resolve(model_query)
+            engine = DecisionEngine::load(model_path, template, ...)
             request = DecisionRequest {
                 state: state_text,
                 choices: args.choices,
