@@ -16,7 +16,7 @@ branch; a dependency counts as met only once it is merged.
 | P1  | Server: concurrency permit, Jev proxy client     | High     | —          | done   | `fix/p1-inference-permit` | `8bcbd2e`                      |
 | P2  | Engine: shared parsing, input limits, errors     | High     | —          | done   | `fix/p2-engine-refactor`  | `5d4ba8c`                      |
 | P3  | Model manager: safe loads                        | Medium   | P2 step 1  | done   | `fix/p3-model-manager`    | `9b1112a`                      |
-| P4  | Model download integrity                         | Medium   | —          | todo   |                           |                                |
+| P4  | Model download integrity                         | Medium   | —          | done   | `fix/p4-download-integrity` |                              |
 | P5  | Config: `--config`, model overrides, errors      | Medium   | P2, P3, P7 | todo   |                           |                                |
 | P6  | CI on pull requests; release workflow hardening  | Medium   | —          | done   | `ci/p6-pr-ci`             | `5eebe34`                      |
 | P7  | Documentation drift                              | Low      | —          | done   | `fix/p7-docs-drift`       | `840c23b`                      |
@@ -307,21 +307,30 @@ EngineLoader` block in the engine module (start after P2 step 1 has merged to av
 `pull_model` downloads from mutable `.../resolve/main/...` URLs and never verifies the bytes.
 llama.cpp's GGUF parser has had memory-safety bugs, so a swapped upstream file is a real risk.
 
-- [ ] 1. Replace `hf_url` in `ModelSpec` with `repo`, `revision` (a full commit SHA), `filename`
+- [x] 1. Replace `hf_url` in `ModelSpec` with `repo`, `revision` (a full commit SHA), `filename`
    and `sha256`. Build the URL as
    `https://huggingface.co/{repo}/resolve/{revision}/{filename}`.
-- [ ] 2. Get the values from public metadata, without downloading models:
+- [x] 2. Get the values from public metadata, without downloading models:
    - commit: `curl -s https://huggingface.co/api/models/<repo>` → `.sha`
    - file hash: `curl -s https://huggingface.co/api/models/<repo>/tree/<sha>` → the entry for
      `filename` → `.lfs.oid`
    - Cross-check any models already in the cache (macOS: `~/Library/Caches/vej/models/`) with
      `shasum -a 256`.
-- [ ] 3. Hash with `sha2` while streaming, then `sync_all`, then compare before the rename. On a
+- [x] 3. Hash with `sha2` while streaming, then `sync_all`, then compare before the rename. On a
    mismatch, or any error, delete the `.tmp` file (use a drop guard) and report expected vs
    actual hash.
-- [ ] 4. Tests: a unit test for the hashing/verification helper using a small in-memory stream, and
+- [x] 4. Tests: a unit test for the hashing/verification helper using a small in-memory stream, and
    a test that every `RECOMMENDED_MODELS` entry has a 40-character revision and a 64-character
    lowercase hex `sha256`.
+
+**Done** on branch `fix/p4-download-integrity` (commit `8774995`), not merged. `src/models.rs`
+became `src/models/mod.rs` (catalog, resolution) plus `src/models/download.rs`
+(`VerifiedDownload` drop guard and `pull_model`). The two cached models (llama-3.2-1b,
+llama-3.2-3b) hash to the pinned `sha256` values. Also corrected `size_gb` for granite-4.2-3b
+(2.24 GB) and gemma-4-e2b (3.11 GB) from the pinned file sizes. An already-cached file is still
+trusted without re-hashing, as before; `vej models pull` only verifies new downloads. Full
+verification passes (177 Rust tests, Go, Dart, Java). When a catalog model is bumped, refresh
+`revision` and `sha256` together from the two API calls above.
 
 ---
 
@@ -427,8 +436,8 @@ In `release.yml`:
 The workflow files can't be run locally. Check them with `actionlint` if it's available, and
 keep job names stable so branch protection can require them later.
 
-**Done** on branch `ci/p6-pr-ci` (worktree `../vej-p6`, 3 commits ending `b6308e5`), not
-merged. actionlint passes, and every command the CI jobs run passes locally on the branch.
+**Done** on branch `ci/p6-pr-ci` (worktree `../vej-p6`, 3 commits ending `b6308e5`), merged
+into `main` at `5eebe34`. actionlint passes, and every command the CI jobs run passes locally on the branch.
 Running the new checks found two problems on `main` that would have failed CI immediately, so
 the branch also fixes them (outside the planned files):
 - `cddb188`: `cargo audit` found 5 vulnerabilities (`rustls` RUSTSEC-2026-0346 to 0349,
