@@ -8,6 +8,8 @@ use std::net::TcpListener;
 pub enum ListenerSource {
     Bound,
     Systemd,
+    /// Only constructed on macOS; other targets still match on it.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Launchd,
 }
 

@@ -63,10 +63,10 @@ impl EngineCore {
         ctx.decode(&mut batch)
             .map_err(|e| anyhow!("Generation prefill decode failed: {:?}", e))?;
 
-        let mut cur_pos = prompt_tokens.len() as i32;
         let mut output_bytes: Vec<u8> = Vec::new();
 
-        for _ in 0..max_gen {
+        // `cur_pos` is the position of the token being generated this iteration.
+        for cur_pos in (prompt_tokens.len() as i32..).take(max_gen) {
             let logits = ctx.get_logits();
             let mut best_idx = 0usize;
             let mut best_val = f32::NEG_INFINITY;
@@ -89,7 +89,6 @@ impl EngineCore {
             batch
                 .add(next_token, cur_pos, &[0], true)
                 .map_err(|e| anyhow!("Failed to add generated token to batch: {:?}", e))?;
-            cur_pos += 1;
             ctx.decode(&mut batch)
                 .map_err(|e| anyhow!("Generation step decode failed: {:?}", e))?;
         }
