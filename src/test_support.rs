@@ -239,10 +239,22 @@ impl ModelLoader for FakeLoader {
             .fetch_max(now_active, Ordering::SeqCst);
         let _active = ActiveLoad(&self.probe.active_loads);
         std::thread::sleep(self.load_delay);
-        let should_fail = self
-            .failures_remaining
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
-            .is_ok();
+        // Take one simulated failure if any remain. A manual CAS loop: `fetch_update` is
+        // deprecated on current stable and its replacement is missing on older toolchains.
+        let should_fail = {
+            let remaining = &self.failures_remaining;
+            let mut current = remaining.load(Ordering::SeqCst);
+            loop {
+                let Some(next) = current.checked_sub(1) else {
+                    break false;
+                };
+                match remaining.compare_exchange(current, next, Ordering::SeqCst, Ordering::SeqCst)
+                {
+                    Ok(_) => break true,
+                    Err(actual) => current = actual,
+                }
+            }
+        };
         if should_fail {
             self.probe.record(format!("load-failed {model_id}"));
             return Err(anyhow!("simulated load failure for {model_id}"));
