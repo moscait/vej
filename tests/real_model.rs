@@ -7,7 +7,8 @@ use serde_json::{Map, json};
 use vej::engine::{
     BatchDecisionRequest, BatchItem, DecisionEngine, DecisionRequest, UnifiedResponse,
 };
-use vej::models::{find_model_spec, resolve_model_path};
+use vej::model_resolver::ModelResolver;
+use vej::models::find_model_spec;
 
 fn load_test_engine() -> DecisionEngine {
     load_test_engine_with_concurrency(1)
@@ -16,7 +17,10 @@ fn load_test_engine() -> DecisionEngine {
 fn load_test_engine_with_concurrency(max_concurrent: usize) -> DecisionEngine {
     let model = std::env::var("VEJ_TEST_MODEL")
         .expect("Set VEJ_TEST_MODEL to a local GGUF path or cached catalog model ID");
-    let path = resolve_model_path(&model).expect("VEJ_TEST_MODEL must resolve to an existing GGUF");
+    let path = ModelResolver::catalog_only()
+        .resolve(&model)
+        .expect("VEJ_TEST_MODEL must resolve to an existing GGUF")
+        .path;
     let spec = find_model_spec(&model);
     let model_id = spec.map(|s| s.id).unwrap_or(&model).to_string();
     let template = spec.map(|s| s.template);

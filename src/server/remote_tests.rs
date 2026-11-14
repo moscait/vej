@@ -255,6 +255,27 @@ async fn remote_clients_cannot_switch_models_unless_allowed() {
 }
 
 #[tokio::test]
+async fn remote_clients_can_only_select_catalog_models() {
+    // A `[models.<name>]` override defines a local-only name: even with model selection
+    // allowed, remote requests naming it keep the serving model.
+    let allowed = remote_app(ClientPolicy {
+        allow_model_selection: true,
+        ..REMOTE
+    });
+    let (status, body) = call(
+        &allowed.app,
+        Method::POST,
+        "/v1/systemone",
+        Some(&allowed.token),
+        Some(decision(json!({ "model": "my-custom-gguf" }))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["model"], "model-a");
+    assert_eq!(allowed.probe.loads(), ["model-a"]);
+}
+
+#[tokio::test]
 async fn remote_keep_alive_is_ignored_unless_allowed() {
     let r = remote_app(REMOTE);
     let t = Some(r.token.as_str());

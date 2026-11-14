@@ -7,13 +7,13 @@ pub mod spec;
 pub mod systemd;
 
 use anyhow::{Context, Result, bail};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
 use crate::cli::{InstallArgs, ServiceArgs, ServiceCommands};
 use crate::config::Config;
-use crate::models::resolve_model_path;
+use crate::model_resolver::ModelResolver;
 pub use spec::ServiceSpec;
 use spec::{build_spec, endpoint_from_args};
 
@@ -87,9 +87,10 @@ impl ServiceStatus {
     }
 }
 
-pub async fn handle(args: ServiceArgs, config: Config) -> Result<()> {
+/// `config_file` is the `--config` flag, carried into the installed service's arguments.
+pub async fn handle(args: ServiceArgs, config: Config, config_file: Option<&Path>) -> Result<()> {
     match args.command {
-        ServiceCommands::Install(install) => install_service(&install, &config),
+        ServiceCommands::Install(install) => install_service(&install, &config, config_file),
         ServiceCommands::Uninstall => {
             if platform::uninstall()? {
                 println!("✓ vej service stopped and removed");
@@ -114,16 +115,26 @@ pub async fn handle(args: ServiceArgs, config: Config) -> Result<()> {
     }
 }
 
-fn install_service(install: &InstallArgs, config: &Config) -> Result<()> {
+fn install_service(
+    install: &InstallArgs,
+    config: &Config,
+    config_file: Option<&Path>,
+) -> Result<()> {
     let settings = install.serve.resolve(config);
-    resolve_model_path(&settings.model)
+    ModelResolver::from_config(config)?
+        .resolve(&settings.model)
         .with_context(|| format!("Could not resolve model '{}'", settings.model))?;
     let program = std::env::current_exe()
         .and_then(|p| p.canonicalize())
         .context("cannot locate the vej executable")?;
-    let spec = build_spec(install, config, program, platform::log_file(), &|name| {
-        std::env::var(name).ok()
-    })?;
+    let spec = build_spec(
+        install,
+        config,
+        program,
+        platform::log_file(),
+        &|name| std::env::var(name).ok(),
+        config_file,
+    )?;
 
     let existing = platform::status()?;
     if existing.installed {

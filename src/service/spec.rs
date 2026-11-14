@@ -25,13 +25,15 @@ pub struct ServiceSpec {
     pub log_file: Option<PathBuf>,
 }
 
-/// Builds the service definition. `env` reads the installing shell's environment.
+/// Builds the service definition. `env` reads the installing shell's environment and
+/// `config_file` is the `--config` flag given to `vej service install`, if any.
 pub fn build_spec(
     install: &InstallArgs,
     config: &Config,
     program: PathBuf,
     log_file: Option<PathBuf>,
     env: &dyn Fn(&str) -> Option<String>,
+    config_file: Option<&Path>,
 ) -> Result<ServiceSpec> {
     let serve = &install.serve;
     let settings = serve.resolve(config);
@@ -55,7 +57,7 @@ pub fn build_spec(
     };
     Ok(ServiceSpec {
         program,
-        args: serve_args(serve, &settings.host, settings.port),
+        args: serve_args(serve, &settings.host, settings.port, config_file),
         environment: service_environment(env),
         on_demand,
         log_file,
@@ -77,7 +79,7 @@ pub fn endpoint_from_args(args: &[String]) -> Option<(String, u16)> {
 
 /// `serve` arguments: host and port always (the socket and server must agree), other
 /// options only when given explicitly, so the service otherwise follows the config file.
-fn serve_args(serve: &ServeArgs, host: &str, port: u16) -> Vec<String> {
+fn serve_args(serve: &ServeArgs, host: &str, port: u16, config_file: Option<&Path>) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "serve".into(),
         "--host".into(),
@@ -85,6 +87,12 @@ fn serve_args(serve: &ServeArgs, host: &str, port: u16) -> Vec<String> {
         "--port".into(),
         port.to_string(),
     ];
+    // The service runs from `/`, so the config path must be absolute too.
+    push_option(
+        &mut args,
+        "--config",
+        config_file.map(|p| absolute(&p.display().to_string())),
+    );
     let model = serve.model.as_deref().map(|m| {
         // The service runs from `/`, so relative model paths must be resolved now.
         if Path::new(m).exists() {
@@ -209,6 +217,7 @@ mod tests {
             PathBuf::from("/opt/vej/bin/vej"),
             Some(PathBuf::from("/Users/me/Library/Logs/vej/vej.log")),
             &|name| env.get(name).cloned(),
+            None,
         )
     }
 
@@ -352,6 +361,31 @@ mod tests {
     fn refuses_socket_only_mode() {
         let err = spec_with_env(&["--no-tcp", "--remote-socket", "/tmp/r.sock"], &[]).unwrap_err();
         assert!(err.to_string().contains("--no-tcp"), "{err}");
+    }
+
+    #[test]
+    fn config_flag_is_passed_to_the_service_as_an_absolute_path() {
+        let s = build_spec(
+            &install_args(&[]),
+            &Config::default(),
+            PathBuf::from("/opt/vej/bin/vej"),
+            None,
+            &|_| None,
+            Some(Path::new("vej.toml")),
+        )
+        .unwrap();
+        let idx = s
+            .args
+            .iter()
+            .position(|a| a == "--config")
+            .expect("--config passed through");
+        assert!(
+            Path::new(&s.args[idx + 1]).is_absolute(),
+            "{}",
+            s.args[idx + 1]
+        );
+        assert!(s.args[idx + 1].ends_with("vej.toml"));
+        assert!(!spec(&[]).args.iter().any(|a| a == "--config"));
     }
 
     #[test]

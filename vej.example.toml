@@ -1,0 +1,65 @@
+# ==============================================================================
+# vej configuration (example)
+# ==============================================================================
+# vej reads ONE file, the first of:
+#   1. --config <PATH>        e.g. `vej serve --config ./vej.example.toml`
+#   2. $VEJ_CONFIG
+#   3. the user config path   `vej config init` creates it, `vej config path` shows it
+#        macOS    ~/Library/Application Support/vej/config.toml
+#        Linux    ~/.config/vej/config.toml
+#        Windows  %APPDATA%\vej\config.toml
+# A vej.toml in the working directory is NOT read. Every key below is optional.
+
+# Default model for `vej serve` and `vej decide` (see `vej models list`):
+#   - "llama-3.2-1b"    (Meta, USA)                - Fastest (0.81 GB)
+#   - "smollm2-1.7b"    (Hugging Face, USA/France) - Small, Apache 2.0 (1.06 GB)
+#   - "llama-3.2-3b"    (Meta, USA)                - Accuracy/speed sweet spot (2.02 GB)
+#   - "granite-4.2-3b"  (IBM, USA)                 - Apache 2.0, 3B class (2.24 GB)
+#   - "gemma-4-e2b"     (Google, USA)              - Default (3.11 GB)
+#   - "llama-3.1-8b"    (Meta, USA)                - Highest capacity (4.92 GB)
+# Or a path to any GGUF file, or a custom name defined under [models] below.
+default_model = "gemma-4-e2b"
+
+# Daemon network binding
+host = "127.0.0.1"
+port = 8080
+# allowed_origins = ["http://localhost:3000"]   # extra browser origins (same as --allow-origin)
+
+# Hardware & engine tuning
+threads = 10         # defaults to the CPU count
+n_gpu_layers = 99    # offload all layers to Apple Silicon Metal / NVIDIA CUDA
+n_ctx = 2048         # context window for decisions
+
+# Model lifecycle (README: "Model Lifecycle")
+# keep_alive = "5m"      # idle time before the model unloads; 0 = after each request, -1 = never
+# max_concurrent = 2     # concurrent inferences, each with its own KV cache
+# preload = true         # load the model at startup
+# idle_exit = -1         # exit the daemon after this long idle (for on-demand services)
+
+# Remote access (README: "Remote Access")
+# [remote]
+# socket = "/Users/me/.vej/remote.sock"   # same as --remote-socket
+# require_token = true
+# allow_model_selection = false
+# allow_keep_alive = false
+
+# ------------------------------------------------------------------------------
+# Model overrides: [models.<name>]
+# ------------------------------------------------------------------------------
+# <name> is a catalog id or alias, or a new name for a custom GGUF file.
+#   path      the GGUF to load; relative paths resolve against THIS file's directory.
+#             Required for names that are not in the catalog.
+#   template  chat template: Llama3, ChatML, Gemma or Gemma4 (case-insensitive).
+#             Defaults to the catalog's template; custom files are guessed from the name.
+# Ids that contain dots MUST be quoted: [models."llama-3.2-3b"], not [models.llama-3.2-3b].
+# Custom names work with -m <name>, default_model and POST /v1/models/switch.
+# Remote clients can still only select catalog models.
+
+# A catalog model from a different quantization (its template stays Llama3):
+# [models."llama-3.2-3b"]
+# path = "models/Llama-3.2-3B-Instruct-Q8_0.gguf"
+
+# A custom file with the right template:
+# [models.mistral-7b]
+# path = "/models/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf"
+# template = "ChatML"

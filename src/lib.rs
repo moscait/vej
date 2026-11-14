@@ -6,6 +6,7 @@ pub mod engine;
 mod idle;
 mod keep_alive;
 mod model_manager;
+pub mod model_resolver;
 pub mod models;
 mod remote;
 mod server;
@@ -13,13 +14,14 @@ mod service;
 #[cfg(test)]
 mod test_support;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 use cli::{Cli, Commands, ConfigCommands, DecideArgs, ModelsCommands, ServeArgs};
-use config::{Config, get_config_path, load_config, save_config};
+use config::{Config, ConfigSource, load_config, save_config};
 use engine::{DecisionEngine, DecisionRequest, EngineLoader};
 use model_manager::ModelManager;
-use models::{RECOMMENDED_MODELS, find_model_spec, get_cache_dir, pull_model, resolve_model_path};
+use model_resolver::ModelResolver;
+use models::{RECOMMENDED_MODELS, get_cache_dir, pull_model};
 use remote::RemoteAuth;
 use remote::tokens::TokenStore;
 use std::path::Path;
@@ -32,18 +34,42 @@ pub async fn run() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let config = load_config().unwrap_or_else(|e| {
-        eprintln!("Warning: {e:#}. Falling back to default configuration.");
-        Config::default()
-    });
+    let source = config::config_source(cli.config.as_deref());
+    if let Ok(cwd) = std::env::current_dir()
+        && let Some(warning) = config::ignored_local_config_warning(&source, &cwd)
+    {
+        eprintln!("Warning: {warning}");
+    }
+    let config = load_config_for(&cli.command, &source)?;
 
     match cli.command {
         Commands::Serve(args) => handle_serve(args, config).await,
         Commands::Decide(args) => handle_decide(args, config),
         Commands::Models(args) => handle_models(args).await,
-        Commands::Config(args) => handle_config(args),
-        Commands::Service(args) => service::handle(args, config).await,
+        Commands::Config(args) => handle_config(args, &source),
+        Commands::Service(args) => service::handle(args, config, cli.config.as_deref()).await,
         Commands::Remote(args) => remote::handle(args, &config),
+    }
+}
+
+/// `serve`, `decide` and `service install` act on the config, so a broken one is fatal for
+/// them; other commands warn and continue on defaults.
+fn load_config_for(command: &Commands, source: &ConfigSource) -> Result<Config> {
+    let required = matches!(
+        command,
+        Commands::Serve(_)
+            | Commands::Decide(_)
+            | Commands::Service(cli::ServiceArgs {
+                command: cli::ServiceCommands::Install(_),
+            })
+    );
+    match load_config(source) {
+        Ok(config) => Ok(config),
+        Err(e) if required => Err(e),
+        Err(e) => {
+            eprintln!("Warning: {e:#}. Falling back to default configuration.");
+            Ok(Config::default())
+        }
     }
 }
 
@@ -52,10 +78,13 @@ async fn handle_serve(args: ServeArgs, config: Config) -> Result<()> {
     settings.validate()?;
 
     // Fail fast on a missing/undownloaded model even when loading lazily.
-    resolve_model_path(&settings.model)
+    let resolver = ModelResolver::from_config(&config)?;
+    resolver
+        .resolve(&settings.model)
         .with_context(|| format!("Could not resolve model '{}'", settings.model))?;
 
     let loader = EngineLoader {
+        resolver,
         n_gpu_layers: settings.n_gpu_layers,
         threads: settings.threads,
         n_ctx: settings.n_ctx,
@@ -160,20 +189,17 @@ fn handle_decide(args: DecideArgs, config: Config) -> Result<()> {
 
     let model_query = args.model.as_deref().unwrap_or(&config.default_model);
 
-    let model_path = resolve_model_path(model_query)
+    let resolved = ModelResolver::from_config(&config)?
+        .resolve(model_query)
         .with_context(|| format!("Could not resolve model '{}'", model_query))?;
-
-    let spec = find_model_spec(model_query);
-    let id_str = spec.map(|s| s.id).unwrap_or(model_query).to_string();
-    let tmpl = spec.map(|s| s.template);
 
     let n_gpu_layers = args.gpu_layers.unwrap_or(config.n_gpu_layers);
     let threads = args.threads.unwrap_or(config.threads);
 
     let engine = DecisionEngine::load(
-        &model_path,
-        id_str,
-        tmpl,
+        &resolved.path,
+        resolved.id.clone(),
+        resolved.template,
         n_gpu_layers,
         threads,
         config.n_ctx,
@@ -284,21 +310,33 @@ async fn handle_models(args: cli::ModelsArgs) -> Result<()> {
     Ok(())
 }
 
-fn handle_config(args: cli::ConfigArgs) -> Result<()> {
+fn handle_config(args: cli::ConfigArgs, source: &ConfigSource) -> Result<()> {
     match args.command {
-        ConfigCommands::Init { force } => {
-            let path = Path::new("vej.toml");
-            if path.exists() && !force {
-                eprintln!("'vej.toml' already exists. Use --force to overwrite.");
+        ConfigCommands::Init { force, path } => {
+            let Some(target) = path.or_else(|| source.path().map(Path::to_path_buf)) else {
+                bail!("no user config directory could be determined; pass --path <PATH>");
+            };
+            if target.exists() && !force {
+                eprintln!(
+                    "{} already exists. Use --force to overwrite.",
+                    target.display()
+                );
                 return Ok(());
             }
-            let config = Config::default();
-            save_config(&config, path)?;
-            println!("Created default configuration file: vej.toml");
+            save_config(&Config::default(), &target)?;
+            println!("Created default configuration file: {}", target.display());
         }
-        ConfigCommands::Path => {
-            println!("Config path: {:?}", get_config_path());
-        }
+        ConfigCommands::Path => match source.path() {
+            Some(path) if path.exists() => {
+                println!("Config path: {} (from {})", path.display(), source.rule());
+            }
+            Some(path) => println!(
+                "Config path: {} (from {}; the file does not exist, so defaults apply)",
+                path.display(),
+                source.rule()
+            ),
+            None => println!("No config file ({}); defaults apply", source.rule()),
+        },
     }
     Ok(())
 }

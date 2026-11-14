@@ -129,12 +129,12 @@ Open your browser to:
 
 | Preset ID | Model Name | Vendor (Origin) | Size (Q4_K_M) | Best For |
 | :--- | :--- | :--- | :--- | :--- |
-| **`llama-3.2-1b`** | Llama-3.2-1B-Instruct | Meta (USA 🇺🇸) | ~0.75 GB | **Maximum Speed:** Shallowest layer depth, ultra-fast prefill, perimeter firewalls |
-| **`smollm2-1.7b`** | SmolLM2-1.7B-Instruct | Hugging Face (USA / France 🇫🇷) | ~1.05 GB | **Open Science / Efficiency:** Apache 2.0 license, outstanding reasoning density |
+| **`llama-3.2-1b`** | Llama-3.2-1B-Instruct | Meta (USA 🇺🇸) | ~0.81 GB | **Maximum Speed:** Shallowest layer depth, ultra-fast prefill, perimeter firewalls |
+| **`smollm2-1.7b`** | SmolLM2-1.7B-Instruct | Hugging Face (USA / France 🇫🇷) | ~1.06 GB | **Open Science / Efficiency:** Apache 2.0 license, outstanding reasoning density |
 | **`llama-3.2-3b`** | Llama-3.2-3B-Instruct | Meta (USA 🇺🇸) | ~2.02 GB | **Recommended Sweet Spot:** Highest accuracy-to-latency ratio, complex multi-class screening (e.g. 10+ talent categories) |
 | **`llama-3.1-8b`** | Llama-3.1-8B-Instruct | Meta (USA 🇺🇸) | ~4.92 GB | **Maximum Reasoning Power:** Frontier-grade zero-shot taxonomy comprehension, deep technical evaluation |
-| **`granite-4.2-3b`** | Granite-4.2-3B-Instruct | IBM (USA 🇺🇸) | ~2.09 GB | **Enterprise-Oriented:** IBM's compact instruct model, Apache 2.0 |
-| **`gemma-4-e2b`** | Gemma-4-E2B-IT | Google (USA 🇺🇸) | ~1.85 GB | **Next-Gen Gemma 4 Architecture (Default):** Google's latest edge architecture, updated `<|turn>` control tokens, Apache 2.0 |
+| **`granite-4.2-3b`** | Granite-4.2-3B-Instruct | IBM (USA 🇺🇸) | ~2.24 GB | **Enterprise-Oriented:** IBM's compact instruct model, Apache 2.0 |
+| **`gemma-4-e2b`** | Gemma-4-E2B-IT | Google (USA 🇺🇸) | ~3.11 GB | **Next-Gen Gemma 4 Architecture (Default):** Google's latest edge architecture, updated `<|turn>` control tokens, Apache 2.0 |
 
 *Latency depends on hardware, model size and prompt length. Measured reference: a short 3-choice decision with `llama-3.2-1b` on an Apple M2 Pro (Metal) takes about 64 ms of engine time (`latency_ms`) and about 84 ms end to end over HTTP. Larger models take proportionally longer. Cold CLI one-off invocations also pay one-time model loading.*
 
@@ -161,18 +161,25 @@ vej models list
 
 Download any model directly from Hugging Face into your platform's local cache:
 ```bash
-vej models pull llama-3.2-1b   # Fast 1B model (~0.75 GB)
+vej models pull llama-3.2-1b   # Fast 1B model (~0.81 GB)
 vej models pull llama-3.2-3b   # Recommended 3B model (~2.02 GB)
 vej models pull llama-3.1-8b   # Frontier 8B model (~4.92 GB)
-vej models pull smollm2-1.7b   # SmolLM2 1.7B (~1.05 GB)
-vej models pull granite-4.2-3b # IBM Granite 4.2 3B (~2.09 GB)
-vej models pull gemma-4-e2b    # Gemma 4 E2B, the default (~1.85 GB)
+vej models pull smollm2-1.7b   # SmolLM2 1.7B (~1.06 GB)
+vej models pull granite-4.2-3b # IBM Granite 4.2 3B (~2.24 GB)
+vej models pull gemma-4-e2b    # Gemma 4 E2B, the default (~3.11 GB)
 ```
 
-### 2. Configuration File (`vej.toml`)
-Initialize or edit `vej.toml`:
+### 2. Configuration File
+`vej` reads one TOML file: `--config <PATH>` if given, else `$VEJ_CONFIG`, else the user config path (see [storage locations](#-model--config-storage-locations-macos-linux-windows)). A `vej.toml` in the working directory is **not** read.
+
+```bash
+vej config init                 # writes <user config dir>/vej/config.toml
+vej config path                 # shows which file is in use and which rule chose it
+vej serve --config ./vej.toml   # any explicit file (also honored by `vej service install`)
+```
+
 ```toml
-# Default model to load: "llama-3.2-1b", "llama-3.2-3b", "llama-3.1-8b", "smollm2-1.7b", "granite-4.2-3b", or "gemma-4-e2b"
+# Default model: a catalog id, a path to a GGUF file, or a [models.<name>] custom name
 default_model = "llama-3.2-3b"
 
 host = "127.0.0.1"
@@ -181,6 +188,24 @@ threads = 10
 n_gpu_layers = 99 # Full Metal / CUDA offload
 n_ctx = 2048
 ```
+
+[`vej.example.toml`](vej.example.toml) documents every setting.
+
+#### Model overrides (`[models.<name>]`)
+Point a catalog model at a different file, fix the chat template of a custom GGUF, or name a custom file so it can be used like a catalog model. Ids with dots must be quoted; a relative `path` is resolved against the config file's directory.
+
+```toml
+# Catalog model, different quantization (template stays Llama3)
+[models."llama-3.2-3b"]
+path = "models/Llama-3.2-3B-Instruct-Q8_0.gguf"
+
+# Custom file with its own name and the right template (Llama3, ChatML, Gemma or Gemma4)
+[models.mistral-7b]
+path = "/models/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf"
+template = "ChatML"
+```
+
+Custom names work with `-m mistral-7b`, `default_model`, and `POST /v1/models/switch`. Remote clients can still only select catalog models. A missing `path` file fails when that model is used, so a bad override for the startup model stops `vej serve` immediately.
 
 ### 3. CLI Override
 Pass `--model` (or `-m`) to any command:
@@ -234,19 +259,22 @@ When you pull a model via `vej models pull <model>`, weights are written to:
   ```
 * **Verify Path:** Run `vej models list` at any time to print the exact resolved cache path on your system.
 
-### 2. Configuration Files (`vej.toml` / `config.toml`)
-`vej` searches for configuration in the following order:
+### 2. Configuration File
+`vej` uses the first of these (the working directory is never searched):
 
-1. **Current Directory (Highest Priority):** `./vej.toml`
-2. **User Config Directory:**
-   * **macOS:** `~/Library/Application Support/vej/config.toml`
-   * **Linux:** `~/.config/vej/config.toml` (or `$XDG_CONFIG_HOME/vej/config.toml`)
-   * **Windows:** `%APPDATA%\vej\config.toml` (e.g. `C:\Users\<username>\AppData\Roaming\vej\config.toml`)
-3. **Custom Override:** Set the `VEJ_CONFIG` environment variable:
+1. **`--config <PATH>`** (the file must exist)
+2. **`VEJ_CONFIG` environment variable** (the file must exist):
    ```bash
    export VEJ_CONFIG="/path/to/custom/vej.toml"
    ```
-* **Verify Path:** Run `vej config path` to see the currently active configuration path.
+3. **User Config Directory** (defaults apply when the file is missing; `vej config init` creates it):
+   * **macOS:** `~/Library/Application Support/vej/config.toml`
+   * **Linux:** `~/.config/vej/config.toml` (or `$XDG_CONFIG_HOME/vej/config.toml`)
+   * **Windows:** `%APPDATA%\vej\config.toml` (e.g. `C:\Users\<username>\AppData\Roaming\vej\config.toml`)
+
+* **Verify Path:** Run `vej config path` to see the active configuration path and the rule that chose it.
+* **Upgrading from 0.1:** a `./vej.toml` in the working directory used to be read; `vej` now warns and ignores it. Pass `--config ./vej.toml` or move it to the user config path.
+* A config file that fails to parse stops `serve`, `decide` and `service install`; other commands warn and use defaults.
 
 ---
 
