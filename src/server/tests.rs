@@ -801,9 +801,14 @@ async fn jev_proxy_maps_timeout_to_504_with_json_error() {
     )
     .await;
 
-    assert_eq!(res.status(), StatusCode::GATEWAY_TIMEOUT);
+    let status = res.status();
     let body = res.into_body().collect().await.unwrap().to_bytes();
     let err_json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        status,
+        StatusCode::GATEWAY_TIMEOUT,
+        "error body: {err_json}"
+    );
     assert!(
         err_json["error"]
             .as_str()
@@ -838,9 +843,14 @@ async fn jev_proxy_maps_body_timeout_to_504_with_json_error() {
     )
     .await;
 
-    assert_eq!(res.status(), StatusCode::GATEWAY_TIMEOUT);
+    let status = res.status();
     let body = res.into_body().collect().await.unwrap().to_bytes();
     let err_json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        status,
+        StatusCode::GATEWAY_TIMEOUT,
+        "error body: {err_json}"
+    );
     assert!(
         err_json["error"]
             .as_str()
