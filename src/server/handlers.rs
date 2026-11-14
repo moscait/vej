@@ -410,13 +410,32 @@ fn jev_error_response(status: StatusCode, message: String) -> Response {
         .into_response()
 }
 
+/// `Display` for reqwest errors stops at the outer layer ("error sending request for url"),
+/// so append the cause chain, which is what tells a timeout from a refused connection.
+fn error_chain(err: &dyn std::error::Error) -> String {
+    let mut text = err.to_string();
+    let mut source = err.source();
+    while let Some(cause) = source {
+        let cause_text = cause.to_string();
+        if !text.ends_with(&cause_text) {
+            text.push_str(": ");
+            text.push_str(&cause_text);
+        }
+        source = cause.source();
+    }
+    text
+}
+
 fn map_jev_error(err: &reqwest::Error) -> Response {
     let status = if err.is_timeout() {
         StatusCode::GATEWAY_TIMEOUT
     } else {
         StatusCode::BAD_GATEWAY
     };
-    jev_error_response(status, format!("Failed to reach TypeSafe AI: {err}"))
+    jev_error_response(
+        status,
+        format!("Failed to reach TypeSafe AI: {}", error_chain(err)),
+    )
 }
 
 pub(super) async fn forward_jev_request(
