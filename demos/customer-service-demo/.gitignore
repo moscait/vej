@@ -1,0 +1,7 @@
+target/
+node_modules/
+src/main/frontend/generated/
+src/main/bundles/
+vite.generated.ts
+.vaadin/
+*.log
