@@ -1,6 +1,11 @@
 package com.moscait.vej;
 
+import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonInclude;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * One question in a multi-question (Jev-format) evaluation.
@@ -18,6 +23,39 @@ public record QuestionSpec(String type, Object instructions, Object criteria) {
         if (type == null || type.isBlank()) {
             type = "choice";
         }
+    }
+
+    /**
+     * Score levels keyed {@code 0..n} are serialized as an ordered list: hosted Jev expects a
+     * list for {@code score} criteria, and {@code vej} indexes lists {@code 0..n}.
+     */
+    @JsonGetter("criteria")
+    Object wireCriteria() {
+        if (!"score".equalsIgnoreCase(type) || !(criteria instanceof Map<?, ?> map) || map.isEmpty()) {
+            return criteria;
+        }
+        Map<Integer, String> levels = new HashMap<>();
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+            if (entry.getKey() == null) {
+                return criteria;
+            }
+            int level;
+            try {
+                level = Integer.parseInt(entry.getKey().toString().trim());
+            } catch (NumberFormatException e) {
+                return criteria;
+            }
+            levels.put(level, entry.getValue() == null ? "" : entry.getValue().toString());
+        }
+        List<String> ordered = new ArrayList<>(levels.size());
+        for (int i = 0; i < levels.size(); i++) {
+            String desc = levels.get(i);
+            if (desc == null) {
+                return criteria;
+            }
+            ordered.add(desc);
+        }
+        return ordered;
     }
 
     /** A categorical question choosing one of {@code criteria}. */

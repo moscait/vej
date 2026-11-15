@@ -25,7 +25,16 @@ public record DecisionRequest(
         List<String> choices,
         String instruction,
         Map<String, QuestionSpec> questions,
+        @JsonInclude(value = JsonInclude.Include.CUSTOM, valueFilter = OmitNaNFilter.class)
         double temperature) {
+
+    /** Excludes {@code temperature} from serialized JSON when set to {@code Double.NaN}. */
+    static final class OmitNaNFilter {
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof Double d && Double.isNaN(d);
+        }
+    }
 
     public DecisionRequest {
         choices = choices == null ? null : List.copyOf(choices);
@@ -54,6 +63,8 @@ public record DecisionRequest(
         public Builder instruction(String instruction) { this.instruction = instruction; return this; }
         public Builder questions(Map<String, QuestionSpec> questions) { this.questions = questions; return this; }
         public Builder temperature(double temperature) { this.temperature = temperature; return this; }
+        /** Omits the {@code temperature} field from the serialized JSON request body. */
+        public Builder omitTemperature() { this.temperature = Double.NaN; return this; }
 
         /** Adds one question, keeping insertion order. */
         public Builder question(String id, QuestionSpec spec) {
