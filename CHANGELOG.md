@@ -61,6 +61,11 @@ config system that no longer depends on the working directory.
 - **CI on pull requests** for Rust (macOS, Linux, Windows check), Go, Dart and Java, plus
   `cargo audit` and `govulncheck`. Release workflow permissions are minimal, actions are
   pinned to commits, and Dependabot is enabled.
+- **java_vej** sends score-question criteria the way hosted Jev expects, can omit
+  `temperature`, and surfaces error details from non-2xx responses.
+- **Customer service demo** (`demos/customer-service-demo`): a Spring Boot and Vaadin app
+  that triages call transcripts with vej and hosted Jev side by side, with first-sentence
+  extraction and latency and accuracy comparison.
 
 ### Fixed
 
