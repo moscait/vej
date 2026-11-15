@@ -1,0 +1,144 @@
+/* Customer Service Triage Demo styles layered on top of Vaadin 25 Aura & Base CSS properties */
+
+.demo-page {
+    max-width: 1440px;
+    margin: 0 auto;
+    padding: var(--vaadin-padding-l);
+    gap: var(--vaadin-gap-l);
+}
+
+.hero-header {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--vaadin-gap-m);
+}
+
+.hero-subtitle {
+    color: var(--vaadin-text-color-secondary);
+    margin: 0;
+}
+
+.config-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: var(--vaadin-gap-m);
+    width: 100%;
+}
+
+.kpi-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: var(--vaadin-gap-m);
+    width: 100%;
+}
+
+.kpi-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.kpi-detail {
+    font-size: 0.85rem;
+    color: var(--vaadin-text-color-secondary);
+}
+
+.controls-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: var(--vaadin-gap-m);
+    width: 100%;
+}
+
+.extracted-preview-box {
+    padding: var(--vaadin-padding-s) var(--vaadin-padding-m);
+    border-radius: var(--vaadin-radius-m);
+    border: 1px solid var(--aura-accent-border-color);
+    background-color: var(--aura-accent-surface);
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.extracted-highlight {
+    background-color: var(--aura-accent-surface);
+    border-bottom: 2px solid var(--aura-accent-color);
+    padding: 0.05rem 0.25rem;
+    border-radius: var(--vaadin-radius-s);
+    font-weight: 600;
+}
+
+.transcript-box {
+    padding: var(--vaadin-padding-m);
+    border-radius: var(--vaadin-radius-m);
+    border: 1px solid var(--vaadin-border-color-secondary);
+    background-color: var(--vaadin-background-container);
+    line-height: 1.55;
+    white-space: pre-wrap;
+}
+
+.detail-columns {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    gap: var(--vaadin-gap-m);
+    width: 100%;
+}
+
+.prob-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    width: 100%;
+}
+
+.prob-row {
+    display: grid;
+    grid-template-columns: 150px 1fr 56px;
+    align-items: center;
+    gap: var(--vaadin-gap-s);
+    font-size: 0.85rem;
+}
+
+.prob-track {
+    height: 10px;
+    border-radius: 999px;
+    background-color: var(--vaadin-background-container-strong);
+    overflow: hidden;
+}
+
+.prob-fill {
+    height: 100%;
+    border-radius: 999px;
+    background-color: var(--aura-accent-color);
+    transition: width 0.25s ease;
+}
+
+.prob-fill-winner {
+    background-color: var(--aura-green);
+}
+
+.prob-fill-jev {
+    background-color: var(--aura-purple);
+}
+
+.mono-metric {
+    font-variant-numeric: tabular-nums;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.85rem;
+}
+
+.log-box {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.78rem;
+    background-color: var(--vaadin-background-container);
+    border: 1px solid var(--vaadin-border-color-secondary);
+    border-radius: var(--vaadin-radius-m);
+    padding: var(--vaadin-padding-s) var(--vaadin-padding-m);
+    max-height: 180px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    width: 100%;
+    box-sizing: border-box;
+}
