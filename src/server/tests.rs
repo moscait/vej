@@ -781,6 +781,21 @@ async fn validation_rejects_oversized_or_malformed_requests_without_loading_mode
     assert_eq!(status, StatusCode::OK, "26 choices A..Z must succeed");
 }
 
+/// Reads from a mock upstream until the request head is complete. Returns false if the
+/// client went away first.
+async fn read_request_head(stream: &mut tokio::net::TcpStream) -> bool {
+    use tokio::io::AsyncReadExt;
+    let mut seen = Vec::new();
+    let mut buf = [0u8; 1024];
+    while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
+        match stream.read(&mut buf).await {
+            Ok(0) | Err(_) => return false,
+            Ok(n) => seen.extend_from_slice(&buf[..n]),
+        }
+    }
+    true
+}
+
 #[tokio::test]
 async fn jev_proxy_maps_timeout_to_504_with_json_error() {
     let client = handlers::build_jev_client(Duration::from_millis(50), Duration::from_millis(80))
@@ -828,6 +843,12 @@ async fn jev_proxy_maps_body_timeout_to_504_with_json_error() {
     let addr = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {
         if let Ok((mut stream, _)) = listener.accept().await {
+            // Like a real server, read the request head before answering. Responding
+            // before the client has written anything makes hyper treat the bytes as an
+            // unexpected message and cancel the request instead of timing out.
+            if !read_request_head(&mut stream).await {
+                return;
+            }
             let _ = stream
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{\"pa")
                 .await;
