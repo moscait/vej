@@ -257,8 +257,18 @@ public final class VejClient {
                 .timeout(timeout)
                 .header("Accept", "application/json")
                 .header("User-Agent", "vej-java/0.1.0");
-        if (apiKey != null && !apiKey.isBlank()) b.header("Authorization", "Bearer " + apiKey);
+        String normalizedKey = normalizeBearerToken(apiKey);
+        if (normalizedKey != null) b.header("Authorization", "Bearer " + normalizedKey);
         return b;
+    }
+
+    private static String normalizeBearerToken(String rawKey) {
+        if (rawKey == null) return null;
+        String trimmed = rawKey.trim();
+        if (trimmed.length() >= 7 && trimmed.substring(0, 7).equalsIgnoreCase("Bearer ")) {
+            trimmed = trimmed.substring(7).trim();
+        }
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private JsonNode send(HttpRequest req) {
@@ -303,11 +313,17 @@ public final class VejClient {
         }
     }
 
-    /** Server errors are plain text, or JSON with "error"/"message". */
+    /** Server errors are plain text, TypeSafe AI {@code detail}, or JSON with "error"/"message". */
     private static String errorMessage(String body) {
         if (body == null || body.isBlank()) return "Request failed";
         try {
             JsonNode n = MAPPER.readTree(body);
+            if (n.hasNonNull("detail")) {
+                JsonNode detail = n.get("detail");
+                if (detail.hasNonNull("message")) return detail.get("message").asText();
+                if (detail.isTextual()) return detail.asText();
+                return detail.toString();
+            }
             if (n.hasNonNull("error")) return n.get("error").asText();
             if (n.hasNonNull("message")) return n.get("message").asText();
         } catch (JsonProcessingException ignored) {

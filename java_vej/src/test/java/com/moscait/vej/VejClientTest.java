@@ -241,4 +241,32 @@ class VejClientTest {
         authed.status();
         assertEquals("Bearer secret", lastAuth.get());
     }
+
+    @Test
+    void apiKeyStripsDuplicateBearerPrefixAndParsesDetailErrors() {
+        route("/v1/systemone", 401, """
+                {"detail":{"error_type":"authentication_error","message":"Cannot authenticate with the server."}}""");
+        VejClient authed = VejClient.builder()
+                .baseUrl("http://127.0.0.1:" + server.getAddress().getPort())
+                .apiKey("  Bearer my-secret  ")
+                .build();
+        VejException ex = assertThrows(VejException.class, () -> authed.evaluate(
+                DecisionRequest.builder()
+                        .model("jev-latest")
+                        .state("test")
+                        .question("category", QuestionSpec.choice("Pick one", Map.of("a", "alpha", "b", "beta")))
+                        .question("depth", QuestionSpec.score("Depth", Map.of("0", "low", "1", "high")))
+                        .omitTemperature()
+                        .build()));
+        assertEquals("Bearer my-secret", lastAuth.get());
+        assertEquals(401, ex.statusCode());
+        assertEquals("HTTP 401: Cannot authenticate with the server.", ex.getMessage());
+
+        JsonNode sent = lastBody.get();
+        assertFalse(sent.has("temperature"));
+        assertTrue(sent.get("questions").get("depth").get("criteria").isArray());
+        assertEquals("low", sent.get("questions").get("depth").get("criteria").get(0).asText());
+        assertEquals("high", sent.get("questions").get("depth").get("criteria").get(1).asText());
+        assertTrue(sent.get("questions").get("category").get("criteria").isObject());
+    }
 }
