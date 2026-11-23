@@ -21,7 +21,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 reqwest = { version = "0.13", features = ["stream"] }
 indicatif = "0.18"
-dirs = "6.0"
+dirs = "7.0"
 tower-http = { version = "0.7", features = ["cors", "fs"] }
 rust-embed = { version = "8.11", features = ["mime-guess", "include-exclude"] }
 listenfd = "1"
