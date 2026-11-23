@@ -36,14 +36,14 @@ graph TD
         FormatPrompt["Prompt Templater & Turn Priming\n(Llama3 / ChatML / Gemma + 'Answer: ')"]
         Tokenizer["Llama Tokenizer\n(llama-cpp-2)"]
         PrefillBatch["Batch Prefill Pass\n(ctx.decode, 0 decode steps)"]
-        LogitFilter["Homogeneous Token Projection\n- Letters: A..P (Choice)\n- Digits: 0..N (Score)\n- Booleans: true/false (Noul)"]
+        LogitFilter["Homogeneous Token Projection\n- Letters: A..Z (Choice)\n- Digits: 0..N (Score)\n- Booleans: true/false (Noul)"]
         Softmax["Restricted Softmax &\nConfidence Calibration"]
         Scorer["Expected Value Calculator\n(E[score] = Σ k · P(k))"]
     end
 
     subgraph StorageLayer["Model & Cache Registry (`models.rs`)"]
         CacheDir["Model Cache Dir\n(~/.cache/vej/models)"]
-        ModelCatalog["Model Catalog (5 Presets)\n(Llama 3.2 1B/3B, Llama 3.1 8B,\nSmolLM2 1.7B, Gemma 2 2B)"]
+        ModelCatalog["Model Catalog (6 Presets)\n(Llama 3.2 1B/3B, Llama 3.1 8B,\nSmolLM2 1.7B, Granite 4.2 3B, Gemma 4 E2B)"]
         Downloader["HTTP Downloader\n(reqwest + indicatif)"]
     end
 
@@ -370,7 +370,7 @@ The engine transparently parses questions across multiple formats:
 
 ### 4.2 Scoring Mathematics (Expected Value Calculation)
 
-For `score` questions, the engine calculates the mathematically calibrated expected score:
+For `score` questions, the engine calculates the expected score:
 
 $$\text{score} = \sum_{k=0}^{M-1} k \cdot P(\text{level}_k)$$
 
@@ -724,7 +724,7 @@ For a discrete set of $K$ candidate options $\{c_1, c_2, \dots, c_K\}$, each can
 $$z_i = \max_{v \in \text{Variants}(c_i)} \text{Logit}(\text{Token}(v))$$
 To prevent exponential overflow in floating-point math, logits are stabilized by subtracting $z_{\max} = \max_k z_k$:
 $$z'_i = z_i - z_{\max}$$
-The calibrated probability for choice $c_i$ under temperature $T$ is computed strictly over the restricted candidate set:
+The normalized (not calibrated) probability for choice $c_i$ under temperature $T$ is computed strictly over the restricted candidate set:
 $$P(c_i) = \frac{\exp\left(\frac{z'_i}{T}\right)}{\sum_{j=1}^K \exp\left(\frac{z'_j}{T}\right)}$$
 - Total forward passes: **1 (prefill batch only, 0 decode steps)**.
 - Latency: about **64 ms** of engine time for a short 3-choice decision with `llama-3.2-1b` on an Apple M2 Pro (Metal); varies with hardware, model size and prompt length.

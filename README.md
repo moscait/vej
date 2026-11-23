@@ -3,7 +3,7 @@
 > **High-performance local System 1 AI decision engine inspired by TypeSafe AI's Jev.**  
 > *"Jev" spelled backwards — engineered in Rust for faster local inference.*  
 > 
-> 🎮 **Includes Interactive Web Playground:** Visually build choices, calibrate softmax probabilities, and run real-time side-by-side benchmarks against hosted Jev at `http://127.0.0.1:8080/playground`.
+> 🎮 **Includes Interactive Web Playground:** Visually build choices, inspect softmax probabilities, and run real-time side-by-side benchmarks against hosted Jev at `http://127.0.0.1:8080/playground`.
 
 ---
 
@@ -11,13 +11,13 @@
 
 Early open-source and community projects like `local-jev` (or `jev-local`) showed how useful local, typed decision-making can be for agentic workflows, guardrails, and classification. However, many of those initial approaches wrap general-purpose local LLM runners (such as Ollama or vLLM) in an **autoregressive decode loop**—prompting a local model to emit a structured JSON string token-by-token (e.g. `{"choice": "refund", "confidence": 0.95}`) and constraining it with GBNF grammars or schema masks. 
 
-While functional, sequential token generation is inherently memory-bandwidth-bound and incurs 400ms–1500ms of latency on local hardware. Furthermore, asking an LLM to generate its own `"confidence": 0.95` number can result in hallucinated, uncalibrated confidence rather than true mathematical probabilities.
+While functional, sequential token generation is inherently memory-bandwidth-bound and incurs 400ms–1500ms of latency on local hardware. Furthermore, asking an LLM to generate its own `"confidence": 0.95` number yields a piece of generated text, not a probability the model actually assigned.
 
-`vej` is another approach to locally running alternative to Jev, engineered from the ground up in Rust with a primary focus on **raw performance, mathematical calibration, and low latency**:
+`vej` is another approach to a locally running alternative to Jev, engineered from the ground up in Rust with a primary focus on **raw performance, honest probabilities, and low latency**:
 
 1. **0 Autoregressive Decode Steps:** Evaluates the prompt state in a **single forward prefill pass**.
 2. **Restricted Logit Projection:** In the computation graph, logit projection is active **only** on the final decision position.
-3. **Calibrated Restricted Softmax:** Directly evaluates candidate choice logits from the model's internal activations to produce normalized probabilities and calibrated confidence—eliminating hallucinated confidence scores.
+3. **Restricted Softmax:** Reads the model's logits for the candidate option labels and normalizes them into a probability distribution—no generated confidence numbers. (These probabilities are normalized, not calibrated; see [How a Decision Is Made](#-how-a-decision-is-made).)
 4. **Hardware Acceleration:** Native Metal Performance Shaders on Apple Silicon (and CUDA/AVX-512 on Linux/Windows) with zero-copy GGUF memory mapping.
 5. **Interactive Decision Playground:** Complete with visual form builder, multi-question support, and real-time side-by-side benchmarking against TypeSafe AI's hosted Jev.
 
@@ -26,13 +26,65 @@ While functional, sequential token generation is inherently memory-bandwidth-bou
 | Feature / Dimension | Hosted `Jev` (TypeSafe AI) | `jev-local` (Ollama / Grammar Wrappers) | `vej` (This Engine) |
 | :--- | :--- | :--- | :--- |
 | **Deployment** | Cloud SaaS (`api.typesafe.ai`) | Local daemon (Python / Docker / Ollama) | Standalone native Rust binary |
-| **Inference Model** | Autoregressive JSON decode | Autoregressive JSON decode (GBNF / Outlines) | **Zero-decode single forward pass** |
-| **Output Tokens** | ~30 – 50 tokens (JSON string) | ~30 – 50 tokens (JSON string) | **0 tokens** (reads logits directly) |
-| **Confidence Scoring** | Argmax / saturated one-hot (`1.0`) | Hallucinated number emitted in JSON text | **Calibrated restricted softmax** |
+| **Inference Model** | Generates output tokens (inferred from reported `output_tokens`) | Autoregressive JSON decode (GBNF / Outlines) | **Zero-decode single forward pass** |
+| **Output Tokens** | ~30 – 50 tokens reported in our tests | ~30 – 50 tokens (JSON string) | **0 tokens** (reads logits directly) |
+| **Confidence Scoring** | Returned `1.0` / `0.0` distributions in our tests | Number emitted in JSON text | **Restricted softmax over option labels** |
 | **Data Privacy** | Sent to third-party cloud | 100% on-device local | **100% on-device local** |
-| **Typical Latency** | ~250 – 400 ms (network + decode) | ~400 – 1500 ms (local decode loop) | **~85 ms** end to end with `llama-3.2-1b` on an Apple M2 Pro (prefill only) |
+| **Typical Latency** | ~250 – 400 ms (network + decode) | ~400 – 1500 ms (local decode loop) | **~85 ms** end to end for a short 3-choice prompt with `llama-3.2-1b` on an Apple M2 Pro; ~100 – 400 ms for the longer prompts in the examples below (latency scales with prompt length) |
 | **Runtime Footprint** | None (cURL / API client) | Heavy runtime (Python, vLLM, or Ollama) | Lightweight native binary (~11 MB) |
 | **API Compatibility** | Native Jev specification | Partial / wrapper schemas | Full drop-in Jev schema support |
+
+---
+
+## 🧭 How a Decision Is Made
+
+`vej` never asks the model to write an answer. It asks the model *which option label it would write first* and reads that preference straight from the logits.
+
+1. **Build the prompt.** The state, the instruction and the options are placed in the model's chat template. Options get short labels: letters (`A)`, `B)`, … up to `Z`) for `choice`, digits for `score`, and `true` / `false` for `noul`. The assistant turn is pre-filled with `Answer: `, so the very next token the model would produce is the label itself:
+
+   ```text
+   Input State:
+   """
+   Customer wants to upgrade to enterprise annual plan
+   """
+
+   Task: Route purchase, enterprise plans, and contract upgrades to sales; ...
+
+   Available Options:
+   A) sales
+   B) support
+   C) billing
+   D) cancellation
+
+   Select the best option from [A, B, C, D]:
+   <assistant> Answer: ▌
+   ```
+
+2. **Run one forward pass.** The whole prompt is evaluated in a single prefill pass, and logits are kept only for the final position. Nothing is generated.
+
+3. **Score only the labels.** For each option, `vej` looks up the logits of that label's single-token spellings (`" A"`, `"A"`, `" a"`, `"a"`), takes the best, and applies a softmax over those N values (divided by `temperature`, default `1.0`). Every other token in the vocabulary is ignored, so the answer is always one of your options and never malformed.
+
+4. **Shape the answer.**
+   - `choice`: the highest-probability option, plus the full distribution.
+   - `noul`: P(`true`).
+   - `score`: the expected level, `Σ k · P(k)` (e.g. `3.42`), plus the per-level distribution.
+
+   A request with several `questions` builds one prompt per question and evaluates them together as parallel sequences in one batch.
+
+### What the probabilities mean (and don't)
+
+- They are the model's **relative preference among your option labels** at the first answer token. They sum to 1 over your options only.
+- They are **normalized, not calibrated.** A `0.7` does not mean the answer is right 70% of the time. Small models often produce fairly flat distributions even on clear-cut inputs (see the examples below), and different models spread probability differently. If you route on a confidence threshold, pick it per model from a labelled sample of your own data.
+- The ranking and the margin between the top two options are usually more informative than the absolute top value.
+
+### Good fits and limits
+
+- **Good fits:** fast gates and routers—intent and ticket routing, guardrail and policy checks, yes/no screening, triage before a slower System 2 model.
+- **No reasoning step:** the decision is made at the first answer token, so tasks that need multi-step inference, arithmetic or long-range comparison are better served by a model that can think before answering.
+- **Option order can matter:** like other multiple-choice LLM setups, models can favour certain letters. An option's letter follows its position in `criteria`, so for important decisions, check that results are stable when you reorder options.
+- **Longer prompts cost more:** latency scales with prompt length, and each question in a multi-question request re-reads the full state.
+
+For the full pipeline, including prompt templates per model family, token selection rules and batching, see [LOGIC.md](LOGIC.md).
 
 ---
 
@@ -132,7 +184,7 @@ Open your browser to:
 | **`llama-3.2-1b`** | Llama-3.2-1B-Instruct | Meta (USA 🇺🇸) | ~0.81 GB | **Maximum Speed:** Shallowest layer depth, ultra-fast prefill, perimeter firewalls |
 | **`smollm2-1.7b`** | SmolLM2-1.7B-Instruct | Hugging Face (USA / France 🇫🇷) | ~1.06 GB | **Open Science / Efficiency:** Apache 2.0 license, outstanding reasoning density |
 | **`llama-3.2-3b`** | Llama-3.2-3B-Instruct | Meta (USA 🇺🇸) | ~2.02 GB | **Recommended Sweet Spot:** Highest accuracy-to-latency ratio, complex multi-class screening (e.g. 10+ talent categories) |
-| **`llama-3.1-8b`** | Llama-3.1-8B-Instruct | Meta (USA 🇺🇸) | ~4.92 GB | **Maximum Reasoning Power:** Frontier-grade zero-shot taxonomy comprehension, deep technical evaluation |
+| **`llama-3.1-8b`** | Llama-3.1-8B-Instruct | Meta (USA 🇺🇸) | ~4.92 GB | **Maximum Accuracy:** Strongest zero-shot comprehension in the catalog, large or subtle taxonomies |
 | **`granite-4.2-3b`** | Granite-4.2-3B-Instruct | IBM (USA 🇺🇸) | ~2.24 GB | **Enterprise-Oriented:** IBM's compact instruct model, Apache 2.0 |
 | **`gemma-4-e2b`** | Gemma-4-E2B-IT | Google (USA 🇺🇸) | ~3.11 GB | **Next-Gen Gemma 4 Architecture (Default):** Google's latest edge architecture, updated `<|turn>` control tokens, Apache 2.0 |
 
@@ -142,7 +194,7 @@ Open your browser to:
 
 - **Use `llama-3.2-1b`** when raw turnaround speed is paramount (e.g., real-time prompt injection firewalls, simple yes/no policy checks, high-volume automated support routing).
 - **Use `llama-3.2-3b` (Suggested Default)** when performing nuanced multi-class classification (e.g., resume screening, talent profile attribution, ambiguous error recovery). In testing, the 3B model achieves near-cloud parity with hosted Jev.
-- **Use `llama-3.1-8b`** when evaluating dense technical criteria (e.g. code architecture reviews, deep systems engineering depth, complex legal or compliance taxonomy).
+- **Use `llama-3.1-8b`** when the criteria are dense or subtly different (e.g. large compliance or policy taxonomies, fine-grained technical categories) and the smaller models' distributions are too flat to act on. It still decides at the first answer token, so work that needs step-by-step reasoning belongs with a System 2 model.
 - **Use `granite-4.2-3b`** for an IBM-backed, Apache 2.0 alternative in the same size class as `llama-3.2-3b`.
 - **Use `gemma-4-e2b`** to run Google's newest 2026 Gemma 4 generation on an edge-efficient parameter footprint with native `<|turn>` token handling under Apache 2.0.
 - **Use `smollm2-1.7b`** when an unencumbered Apache 2.0 license is required.
@@ -334,7 +386,7 @@ http://127.0.0.1:8080/playground
 - **Expanded Preset Library:** 
   - **Resume Screening:** Full 7-question TypeSafe AI benchmark evaluating candidate engineering depth, mentorship, LLM products, open source, and talent profiles.
   - One-click templates for support ticket triage, perimeter security firewalls, agent error recovery, noul safety policies, and SLA routing.
-- **Live Visual Distributions:** Ranked softmax probability bars with textual category labels, calibrated confidence gauges, expected value calculations, and latency meters.
+- **Live Visual Distributions:** Ranked softmax probability bars with textual category labels, confidence gauges, expected value calculations, and latency meters.
 - **Code Export:** Export ready-to-run snippets in **cURL**, **Python**, **TypeScript**, and **Rust**.
 
 *(The playground is also an independent web app located in `./playground` that can be run with Vite via `cd playground && npm run dev`).*
@@ -359,25 +411,27 @@ curl -X POST http://127.0.0.1:8080/v1/systemone \
 **Response:**
 ```json
 {
-  "decision": "billing",
-  "confidence": 0.6120,
+  "decision": "sales",
+  "confidence": 0.3199,
   "probabilities": {
-    "billing": 0.6120,
-    "cancellation": 0.1858,
-    "sales": 0.1281,
-    "support": 0.0741
+    "sales": 0.3199,
+    "support": 0.3183,
+    "billing": 0.2147,
+    "cancellation": 0.1471
   },
   "model": "llama-3.2-1b",
-  "latency_ms": 218.71,
-  "tokens_evaluated": 126
+  "latency_ms": 95.16,
+  "tokens_evaluated": 123
 }
 ```
+
+The 1B model picks the right queue, but `support` trails by only 0.2 points. That near-tie is the signal to act on: send close calls to a larger model or a human, or use the nested `questions` schema below so each option carries a description.
 
 > **Tip:** For multi-class classification requiring high precision, use Jev's nested `questions` schema with granular `criteria` definitions (shown in Examples 2 and 3 below). This provides semantic descriptions for each choice and yields superior classification accuracy with small models.
 
 #### Supported Question Primitive Types:
-- **`choice` (Categorical):** Evaluates multi-class options, projecting logits onto uniform letter tokens (`A`..`P`) and returning the winning `choice` and calibrated probability distribution.
-- **`noul` (Boolean):** Evaluates yes/no propositions, returning calibrated `noul` probability for `true` condition fulfillment.
+- **`choice` (Categorical):** Evaluates multi-class options (up to 26), projecting logits onto uniform letter tokens (`A`..`Z`) and returning the winning `choice` and the probability distribution.
+- **`noul` (Boolean):** Evaluates yes/no propositions, returning the probability of `true` as `noul`.
 - **`score` (Continuous / Depth):** Evaluates ratings and numeric levels, calculating the mathematical expected score $E[\text{score}] = \sum k \cdot P(\text{level}_k)$ (e.g. `3.42` out of 5) alongside the discrete probability spread.
 
 ### `GET /v1/models`
@@ -662,7 +716,7 @@ JSON
 | :--- | :--- | :--- | :--- |
 | **Model** | `llama-3.2-1b` | `jev-1.13.0` | Small, efficient open model vs. cloud hosted model |
 | **Decision** | **`billing`** | **`billing`** | Identical correct classification |
-| **Confidence** | **`54.72%`** (Calibrated) | **`100.0%`** (Saturated) | Softmax probability distribution vs. argmax one-hot |
+| **Confidence** | **`54.72%`** | **`100.0%`** | Softmax distribution over options vs. a one-hot result |
 | **Output Tokens** | **`0`** | **`38`** | **Zero decode steps** vs. autoregressive token generation |
 | **Input Tokens** | **`204`** | **`430`** | Compact prompt vs. schema enforcement wrappers |
 | **Connection Latency** | **`0.2 ms`** (Localhost) | **`58.9 ms`** (Cloud TLS) | Zero network hops or round-trip latency |
@@ -735,15 +789,15 @@ Time to First Byte: 0.273729s
 
 1. **Zero Decode vs. Autoregressive Generation (`output_tokens`):**
    - **`vej` (0 output tokens):** Evaluates the decision in a **single forward prefill pass**. It projects logits only onto the candidate choice tokens on the final position of the prompt—generating zero subsequent tokens.
-   - **`Jev` (38 output tokens):** Employs an autoregressive decode loop, generating JSON token-by-token (e.g. `{"department":{"type":"choice","choice":"billing"}}`), which requires 38 sequential forward passes through transformer layers.
+   - **`Jev` (38 output tokens):** Reports 38 output tokens for this request, which suggests it generates its answer token by token, with one sequential forward pass per token.
 
-2. **Calibrated Softmax vs. Hard Categorical Distribution:**
-   - **`vej` captures semantic nuances:** The ticket mentions *"charged twice"* (billing) but also *"annual subscription... or we will drop our account"* (sales/retention). `vej` outputs calibrated probabilities (`billing`: 54.7%, `sales`: 30.9%), allowing applications to establish threshold-based routing (e.g., flagging ambiguous requests for human review if confidence < 70%).
-   - **`Jev` outputs an argmax / one-hot distribution:** It saturates the winning category to `1.0` and sets competitors to `0.0`, discarding nuanced probability distribution.
+2. **Probability Distribution vs. One-Hot Result:**
+   - **`vej` shows the competing reading:** The ticket mentions *"charged twice"* (billing) but also *"annual subscription... or we will drop our account"* (sales/retention). `vej` reports both (`billing`: 54.7%, `sales`: 30.9%), so an application can treat a narrow margin as ambiguous and route it for review. Because these probabilities are not calibrated, choose any threshold per model from a labelled sample of your own tickets rather than using a fixed number.
+   - **`Jev` returned a one-hot distribution here:** `1.0` for the winner and `0.0` for the rest, which gives no signal about how close the call was.
 
 3. **Context Overhead (`input_tokens`):**
    - `vej` evaluates **204 tokens** using optimized, compact prompt framing.
-   - `Jev` processes **430 tokens** due to proprietary system meta-prompts, schema enforcement wrappers, and JSON generation guards.
+   - `Jev` reports **430 tokens**, presumably including its own system prompt and output-format instructions.
 
 4. **Latency & Zero Network Overhead:**
    - `vej` connects in **0.2 ms** (localhost) and completes the entire decision on local hardware in **196 ms**.
