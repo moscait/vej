@@ -4,7 +4,7 @@ All notable changes to vej. The Dart SDK keeps its own log in
 [`dart_vej/CHANGELOG.md`](dart_vej/CHANGELOG.md). Earlier releases are described on the
 [GitHub releases page](https://github.com/moscait/vej/releases).
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-11-23)
 
 A hardening release from a full-codebase review: safer model loading and downloads, input
 limits on every endpoint, prompt-injection defenses, a persistent inference context, and a
@@ -95,11 +95,13 @@ config system that no longer depends on the working directory.
 - **Catalog and docs** agree again: the removed `gemma-2` models are gone from the docs and
   playground, latency claims name the hardware, and catalog sizes reflect the pinned files
   (granite-4.2-3b is 2.24 GB and gemma-4-e2b is 3.11 GB).
-- **Dependencies:** `rustls`, `rustls-webpki`, `rustix`, `tokio` and `yoke-derive`
+- **Dependencies:** `rustls`, `rustls-webpki`, `rustix`, `tokio`, `url`
+  ([RUSTSEC-2026-0592](https://rustsec.org/advisories/RUSTSEC-2026-0592)) and `yoke-derive`
   advisories; zvej builds with Go 1.26.11 for standard-library security fixes. Dependabot
   bumps: llama-cpp-2 0.1.161 (the engine now tokenizes through the new vocab API),
-  reqwest 0.13, sha2 0.11, toml 1.2, getrandom 0.4, the GitHub Actions used by CI and
-  release, the Java SDK's Jackson, JUnit and Maven plugins, and the playground's Vite 8.
+  reqwest 0.13, sha2 0.11, toml 1.2, getrandom 0.4, tower-http 0.7, dirs 7, the GitHub
+  Actions used by CI and release, the Java SDK's Jackson, JUnit and Maven plugins, and the
+  playground's Vite 8.
 
 ### Performance
 
