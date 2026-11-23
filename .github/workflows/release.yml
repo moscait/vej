@@ -106,10 +106,16 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.target }}
 
+      - name: Read CMake version
+        id: cmake
+        shell: bash
+        # target/ holds the CMake build dirs; a cache made by another CMake version breaks configure.
+        run: echo "version=$(cmake --version | head -n1 | awk '{print $3}')" >> "$GITHUB_OUTPUT"
+
       - name: Rust Cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: ${{ matrix.target }}
+          key: ${{ matrix.target }}-cmake-${{ steps.cmake.outputs.version }}
 
       - name: Build binary (release)
         if: matrix.target != 'aarch64-pc-windows-msvc'

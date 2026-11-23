@@ -45,8 +45,16 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
 
+      - name: Read CMake version
+        id: cmake
+        shell: bash
+        # target/ holds the CMake build dirs; a cache made by another CMake version breaks configure.
+        run: echo "version=$(cmake --version | head -n1 | awk '{print $3}')" >> "$GITHUB_OUTPUT"
+
       - name: Rust cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: cmake-${{ steps.cmake.outputs.version }}
 
       - name: Check formatting
         run: cargo fmt --check
@@ -69,8 +77,16 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Read CMake version
+        id: cmake
+        shell: bash
+        # target/ holds the CMake build dirs; a cache made by another CMake version breaks configure.
+        run: echo "version=$(cmake --version | head -n1 | awk '{print $3}')" >> "$GITHUB_OUTPUT"
+
       - name: Rust cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: cmake-${{ steps.cmake.outputs.version }}
 
       # Catches Unix-only code that isn't cfg-gated before a release tag does.
       - name: Check (all targets)
